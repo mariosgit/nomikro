@@ -45,7 +45,9 @@
             "enc-push",
             "enc-touched"
         ],
-        "brightness": [0, 13, 12, 10, 11]
+        "brightness": [
+            0, 13, 12, 10, 11
+        ]
     },
     "pad": {
         "order": [

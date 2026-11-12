@@ -2,6 +2,8 @@ import { MaschineMikroMk3 } from './maschine_mikro_mk3';
 
 export class Screen {
     private device: MaschineMikroMk3;
+    private blanktime = 3000;
+    private blanktimer: number | null = null;
 
     constructor(device: MaschineMikroMk3) {
         this.device = device;
@@ -11,8 +13,19 @@ export class Screen {
         const imgData = this.getBitImg(text, size);
         const buf = this.getBuffer(imgData);
         await this.writeBuf(buf);
+
+        if (this.blanktimer) {
+            window.clearTimeout(this.blanktimer);
+        }
+        this.blanktimer = window.setTimeout(() => {
+            this.clear();
+        }, this.blanktime);
     }
 
+    private async clear(): Promise<void> {
+        const blankBuf = new Array(512).fill(0xFF);
+        await this.writeBuf(blankBuf);
+    }
     private getBitImg(text: string, size: number): ImageData {
         const canvas = document.createElement('canvas');
         canvas.width = 128;

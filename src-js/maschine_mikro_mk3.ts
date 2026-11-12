@@ -4,12 +4,23 @@ import { Lights } from './lights';
 import { Screen } from './screen';
 import settings from './maschine_mikro_mk3.json';
 
+export interface PadEvent {
+    cmd: string;
+    pad_nb: number;
+    pad_val: number;
+    touched: boolean;
+    pressed: boolean;
+    released: boolean;
+}
+
 export class MaschineMikroMk3 {
     private hid: HIDDevice | null = null;
     public buttons: Buttons;
     public pads: Pads;
     public lights: Lights;
     public screen: Screen;
+
+    private padsCallback: ((pad: PadEvent) => void) | null = null;
 
     constructor() {
         const vid = parseInt(settings.vid, 16);
@@ -21,6 +32,10 @@ export class MaschineMikroMk3 {
         this.screen = new Screen(this);
     }
 
+    public setPadCallback(callback: (pad: PadEvent) => void): void {
+        this.padsCallback = callback;
+    }
+
     private handleInputReport(event: HIDInputReportEvent): void {
         const bytes = new Uint8Array(event.data.buffer, event.data.byteOffset, event.data.byteLength);
 
@@ -29,29 +44,15 @@ export class MaschineMikroMk3 {
         if(btn) {
             console.log('Decoded button command:', btn.btn_pressed.join(', '));
         }
-        let cmd = this.pads.decode(rawCmd);  // first byte is 63
-        if(cmd) {
+        let pad = this.pads.decode(rawCmd);  // first byte is 63
+        if(pad) {
             // { "cmd": "pad", "pad_nb": 0-15, "pad_val": 0-4095, "touched": false, "pressed": true, "released": false }
-            console.log('Decoded pad nb,val,tchd,prsd,rel:', cmd.pad_nb, cmd.pad_val, cmd.touched, cmd.pressed, cmd.released);
+            console.log('Decoded pad nb,val,tchd,prsd,rel:', pad.pad_nb, pad.pad_val, pad.touched, pad.pressed, pad.released);
+            if (this.padsCallback) {
+                this.padsCallback(pad);
+            }
         }
     }
-
-    // async connect(): Promise<void> {
-    //     await this.hid.connect();
-
-    //     this.hid.setInputCallback((rawCmd) => {
-    //         console.log('Received raw command:', rawCmd);
-    //         let cmd = this.buttons.decode(rawCmd);
-    //         if (cmd) {
-    //             console.log('Decoded button command:', cmd);
-    //             return;
-    //         }
-    //         cmd = this.pads.decode(rawCmd);
-    //         if (cmd) {
-    //             console.log('Decoded pad command:', cmd);
-    //         }
-    //     });
-    // }
 
     async openDevice(device: HIDDevice): Promise<void> {
         this.hid = device;
@@ -72,18 +73,4 @@ export class MaschineMikroMk3 {
         await this.hid.sendReport(reportId, reportData);
     }
 
-    readCmd(): Promise<{ cmd: string; [key: string]: any } | null> {
-        return new Promise((resolve, reject) => {
-            // this.hid.setInputCallback((rawCmd) => {
-            //     let cmd = this.buttons.decode(rawCmd);
-            //     if (cmd) {
-            //         resolve(cmd);
-            //         return;
-            //     }
-            //     cmd = this.pads.decode(rawCmd);
-            //     resolve(cmd);
-            // });
-            reject(new Error('readCmd() not implemented yet'));
-        });
-    }
 }

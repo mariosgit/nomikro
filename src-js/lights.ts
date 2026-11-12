@@ -26,11 +26,25 @@ export class Lights {
     }
 
     private getElemNb(elemType: string, elemRef: string | number): number | null {
+        let result: number | null = null;
         if (elemType === 'pad' || elemType === 'button') {
-            if (elemRef === 'enter') return null;
-            return this.settings[elemType]['order'].indexOf(elemRef);
+            if (elemRef === 'enter') {
+                result = null;
+            } else {
+                // WTF ? Pain in the popo ? Trigger type error !
+                if (typeof this.settings[elemType]['order'][0] === 'string') {
+                    elemRef = elemRef.toString();
+                }
+                if (typeof this.settings[elemType]['order'][0] === 'number') {
+                    elemRef = typeof elemRef === 'string' ? parseInt(elemRef) : elemRef;
+                }
+                result = this.settings[elemType]['order'].indexOf(elemRef);
+                // console.log(`Getting ${elemType} number for reference ${elemRef}:`, result, typeof elemRef, typeof this.settings[elemType]['order'][0]);
+            }
+        } else {
+            result = typeof elemRef === 'number' ? elemRef : parseInt(elemRef as string);
         }
-        return typeof elemRef === 'number' ? elemRef : parseInt(elemRef as string);
+        return result;
     }
 
     private getColorByte(elemType: string, elem: any): number {
@@ -53,9 +67,12 @@ export class Lights {
         for (const elemRef in this.lightsState[elemType]) {
             const elem = this.lightsState[elemType][elemRef];
             const elemNb = this.getElemNb(elemType, elemRef);
-            if (elemNb !== null) {
+            if (elemNb !== null && elemNb >= 0) {
                 const byte = this.getColorByte(elemType, elem);
                 buf[offset + elemNb] = byte;
+                console.log(`Setting ${elemType} ${elemRef} to color ${elem.color}, value ${elem.val}, nb ${elemNb}, byte ${byte}`);
+            } else {
+                console.warn(`Unknown ${elemType} reference: ${elemRef}`);
             }
         }
     }

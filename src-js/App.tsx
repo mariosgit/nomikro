@@ -32,24 +32,18 @@ async function demoScreen(maschine: MaschineMikroMk3): Promise<void> {
 }
 
 async function demoBtnPad(maschine: MaschineMikroMk3): Promise<void> {
-    while (true) {
-        const cmd = await maschine.readCmd();
-        if (cmd) {
-            console.log('Received command:', cmd);
-            if (cmd.cmd === 'pad') {
-                console.log(`Pad number ${cmd.pad_nb} pressed with value: ${cmd.pad_val}`);
-                maschine.lights.set('pad', cmd.pad_nb, 2, 'red');
-            }
-            if (cmd.cmd === 'btn') {
-                console.log(cmd);
-                if (cmd.btn_pressed && cmd.btn_pressed.length > 0) {
-                    const pressedBtn = cmd.btn_pressed[0];
-                    maschine.lights.set('button', pressedBtn, 3);
-                }
-            }
-            await maschine.lights.update();
-        }
+
+    if (maschine) {
+        maschine.setPadCallback((pad) => {
+            console.log(`Pad callback: Pad ${pad.pad_nb} value ${pad.pad_val} touched ${pad.touched} pressed ${pad.pressed} released ${pad.released}`);
+            maschine.lights.set('pad', pad.pad_nb, pad.pressed ? 3 : 0, 'red');
+            maschine.lights.set('pad', pad.pad_nb, pad.released ? 3 : 0, 'green');
+            maschine.lights.update();
+
+            maschine.screen.set(`Pad ${pad.pad_nb}\nVal: ${pad.pad_val}\n`);
+        });
     }
+
 }
 
 export function App() {
@@ -76,7 +70,8 @@ export function App() {
 
                     demoLights(newMaschine);
                     demoScreen(newMaschine);
-                    // demoBtnPad(newMaschine);
+                    demoBtnPad(newMaschine);
+
                 } catch (error) {
                     setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
                     console.error(error);
@@ -94,15 +89,14 @@ export function App() {
             }
         };
 
-
         navigator.hid.addEventListener('connect', handleDeviceConnect);
         navigator.hid.addEventListener('disconnect', handleDeviceDisconnect);
 
-        if(maschine && connected) {
-            console.log('Device already connected, running demo...');
-            demoLights(maschine);
-            demoScreen(maschine);
-            demoBtnPad(maschine);
+        if (maschine && connected) {
+            // console.log('Device already connected, running demo...');
+            // demoLights(maschine);
+            // demoScreen(maschine);
+            // demoBtnPad(maschine);
         } else {
             navigator.hid.getDevices().then(async (devices) => {
                 console.log('Checking for already connected devices...', devices);
@@ -143,7 +137,7 @@ export function App() {
 
     return (
         <div>
-            <h1>Maschine Mikro MK3 WebHID Demo</h1>
+            <h1>Maschine Mikro MK3 - WebHID Demo</h1>
             <button onClick={handleConnect} disabled={connected}>
                 {connected ? 'Connected' : 'Connect to Device'}
             </button>

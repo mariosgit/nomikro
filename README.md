@@ -1,3 +1,25 @@
+# Nomikro
+
+port of ```Pymikro``` using 
+WebHID / Node / typescript / react 
+
+Get started
+```
+npm i
+npm start
+```
+
+Open ```localhost:9000``` or whatever in chrome / chromium or whatever browser with WebHID support. (Only works on localhost or behind a https proxy !)
+
+
+## Todo
+
+* Better event handler for the App
+* Make demo Apps
+  * Sequencer ?
+
+---
+
 # Pymikro
 
 Python module to control the Maschine Mikro MK3. It allows you to use this

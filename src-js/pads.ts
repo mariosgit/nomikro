@@ -1,3 +1,5 @@
+import { PadEvent } from "./maschine_mikro_mk3";
+
 export class Pads {
     private padOrder: number[];
 
@@ -5,15 +7,22 @@ export class Pads {
         this.padOrder = padOrder;
     }
 
-    decode(rawCmd: number[]): { cmd: string;[key: string]: any } | null {
+    decode(rawCmd: number[]): PadEvent | null {
         if (rawCmd.length !== 63) {
             return null;
         }
 
         // console.log('Decoding pad command from raw data:', rawCmd);
 
-        const info: any = {};
-        info.cmd = 'pad';
+        const info: PadEvent = {
+            cmd: 'pad',
+            pad_nb: 0,
+            pad_val: 0,
+            touched: false,
+            pressed: false,
+            released: false
+        };
+
         info.pad_nb = this.padOrder[rawCmd[0]];
         info.pad_val = ((rawCmd[1] & 0x0F) << 8) + rawCmd[2];
 
