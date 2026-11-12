@@ -12,7 +12,7 @@ npm i
 npm run dev
 ```
 
-Open `localhost:9000` in Chrome/Chromium (WebHID; only works on localhost or behind https).
+Open `localhost:9000` in a Chromium-based desktop browser: Chrome, Edge, Brave, Opera, Chromium (WebHID, version 89+; only works on localhost or behind https). Safari, Firefox and iOS browsers have no WebHID: the page shows a notice instead of the Connect button.
 On Linux, allow access to the device: `sudo cp 50-ni-maschine.rules /etc/udev/rules.d/` and re-plug.
 
 - `localhost:9000`: the app; pick an app in the header (`#/lab`: light show + hardware tests, `#/starter`: template)
@@ -20,7 +20,9 @@ On Linux, allow access to the device: `sudo cp 50-ni-maschine.rules /etc/udev/ru
 
 `npm run build` builds all pages to `dist/`.
 
-### GitHub Pages
+### Try It ! on GitHub Pages
+
+[goto MüOp](https://mariosgit.github.io/nomikro/) use chome/chromium !
 
 Every push to `main` builds the site and deploys it to `https://<user>.github.io/<repo>/`
 (see [`.github/workflows/pages.yml`](.github/workflows/pages.yml)). One-time setup in the GitHub repo:

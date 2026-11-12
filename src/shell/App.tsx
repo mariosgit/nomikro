@@ -7,6 +7,9 @@ import { parseHash, toHash, type Route } from './route';
 
 const APP_NAMES = Object.keys(APPS) as AppName[];
 
+/** WebHID: Chrome, Edge, Opera, Brave, Chromium (desktop). Not in Safari, Firefox or on iOS. */
+const HID_SUPPORTED = typeof navigator !== 'undefined' && 'hid' in navigator;
+
 type Status = { kind: 'idle' | 'busy' | 'ok' | 'error'; text: string };
 
 /** Current route, with an unknown app replaced by the default one. */
@@ -16,7 +19,9 @@ const currentRoute = (): Route => {
 };
 
 export function App() {
-    const [status, setStatus] = useState<Status>({ kind: 'idle', text: 'Not connected' });
+    const [status, setStatus] = useState<Status>(
+        HID_SUPPORTED ? { kind: 'idle', text: 'Not connected' } : { kind: 'error', text: 'WebHID not supported' },
+    );
     const [maschine, setMaschine] = useState<MaschineMikroMk3 | null>(null);
     const [route, setRoute] = useState(currentRoute);
     const [routeKey, setRouteKey] = useState(0);
@@ -55,6 +60,7 @@ export function App() {
 
     // Device connect / disconnect, auto-connect if permission was granted before (survives page reloads)
     useEffect(() => {
+        if (!HID_SUPPORTED) return;
         const onConnect = (event: HIDConnectionEvent) => {
             if (isMaschine(event.device)) connectDevice(event.device);
         };
@@ -138,7 +144,7 @@ export function App() {
 
                     <div className="flex items-center gap-3">
                         <StatusBadge status={status} />
-                        {!maschine && (
+                        {!maschine && HID_SUPPORTED && (
                             <button
                                 onClick={handleConnect}
                                 className="rounded-md bg-orange-500 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-orange-600 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 focus-visible:outline-none dark:focus-visible:ring-offset-zinc-900"
@@ -151,10 +157,20 @@ export function App() {
             </header>
 
             <main className="mx-auto max-w-5xl space-y-4 px-4 py-6">
-                {!maschine && (
-                    <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
-                        Connect the device to play. WebHID needs Chrome or Chromium.
-                    </p>
+                {!HID_SUPPORTED ? (
+                    <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-800 dark:bg-red-950/50 dark:text-red-300">
+                        <p className="font-semibold">This browser can't talk to the controller (no WebHID).</p>
+                        <p className="mt-1">
+                            Use a Chromium-based desktop browser: <b>Chrome</b>, <b>Edge</b>, <b>Brave</b>, <b>Opera</b> or <b>Chromium</b> (version 89 or
+                            later). Safari and Firefox don't support WebHID, neither does any browser on iOS. The pages below are shown for reading only.
+                        </p>
+                    </div>
+                ) : (
+                    !maschine && (
+                        <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+                            Connect the device to play.
+                        </p>
+                    )
                 )}
                 {/* key: switching apps unmounts the old one, which aborts its device task */}
                 <Component

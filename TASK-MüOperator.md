@@ -33,6 +33,20 @@ Mapping and controls: see the page (cheat sheet) and `src/apps/muop/controller.t
   stored in the song per track.
 - [x] SEARCH = next sound for the current track (SHIFT = previous), STAR = random variation (temporary, not saved),
   VOLUME + encoder = track volume (saved in the song), SHIFT + VOLUME = master. Engines take a `random` flag (`chooser()`).
+- [ ] SHIFT + pad = the functions printed on the pads (as on the device):
+  - 1 Undo, 2 Redo, 3 Step Undo, 4 Step Redo: an undo history of song edits. Step undo = one edit, Undo = a whole
+    gesture / recording pass.
+  - 5 Quantize, 6 Quantize 50 %: live-recorded hits (needs off-grid timing / micro offsets per step first).
+  - 7 Nudge <, 8 Nudge >: shift the current track (or drum sound) one step left / right in the pattern (rotate).
+  - 9 Clear (the current track in the pattern), 10 Clear Auto (the recorded FX / later p-locks), 11 Copy, 12 Paste
+    (track or pattern clipboard).
+  - 13 Semitone −, 14 Semitone +: transpose (song key / track); 15 Octave −, 16 Octave +: the track's octave
+    (also covers "octave editable" below).
+  - SHIFT + pad must keep pads silent; the pads show the 16 functions dimmed while SHIFT is held.
+- [ ] Other printed second functions to consider: ERASE / Replace (record overwrites), REC / Count-In,
+  RESTART / Loop, FOLLOW / Grid (quantize grid), DUPLICATE / Double (pattern length ×2), MUTE / Choke,
+  FIXED VEL / 16 Vel (pads = one sound at 16 velocities), NOTE REPEAT / Arp, VARIATION (random variation, see the
+  pattern randomization below).
 - [ ] Sound presets: save a sound (engine + settings, e.g. a STAR result you like) under a name, browse them with SEARCH.
 - [ ] Sound tuning: rework the sounds that feel weak (needs listening feedback, `src/engine/instruments/`)
 - [ ] More engines: samples (drum kits as WAV/OGG one-shots), smplr, Faust / AudioWorklet, MIDI out as an "instrument"
