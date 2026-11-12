@@ -13,7 +13,7 @@ npm run dev
 Open `localhost:9000` in Chrome/Chromium (WebHID; only works on localhost or behind https).
 On Linux, allow access to the device: `sudo cp 50-ni-maschine.rules /etc/udev/rules.d/` and re-plug.
 
-- `localhost:9000`: the app (light show + hardware test modes)
+- `localhost:9000`: the app; pick an app in the header (`#/lab`: light show + hardware tests, `#/starter`: template)
 - `localhost:9000/examples/minimal/`: a minimal example without a framework
 
 `npm run build` builds all pages to `dist/`.
@@ -30,8 +30,10 @@ Every push to `main` builds the site and deploys it to `https://<user>.github.io
 src/
   maschine/        the driver: WebHID, lights, screen, pads, buttons/encoder/strip. Framework-free, no app code.
                    Public API in index.ts, docs in src/maschine/README.md
-  app/             the React demo app
-    modes/         one mode = one thing the app does with the device (light show, tests, …)
+  shell/           the React frame: connect, header (app switcher), routing #/<app>/<path>?<params>, device runner
+  apps/            one folder per idea / app version, registered in apps/index.ts
+    lab/           light show + hardware test modes
+    starter/       template for a new app
   dev/             dev-only helpers (log to the dev server)
 examples/
   minimal/         ~50 lines: connect, pads/buttons/strip/encoder → lights + screen
@@ -42,8 +44,12 @@ vite-plugins/      dev server helpers (full reload on change, hw-bridge for test
 
 - **Own app, any framework (or none):** copy `examples/minimal`, import from `src/maschine`, and add the page to
   `build.rollupOptions.input` in `vite.config.ts`. Read [`src/maschine/README.md`](src/maschine/README.md).
-- **A new mode in the demo app:** write `run(maschine, signal, ctx)` (see `src/app/modes/types.ts`), and register it
-  in `src/app/modes/index.ts`. It shows up as a button.
+- **A new idea / app version:** copy `src/apps/starter/` to `src/apps/<name>/`, rename the export and add it to
+  `src/apps/index.ts`. It shows up in the header at `#/<name>`. The app is a React component (`AppProps` in
+  `src/shell/types.ts`) and drives the device with `useDeviceTask()` (`src/shell/device.ts`), which hands the device
+  over cleanly when you switch apps.
+- **A new lab mode:** write `run(maschine, signal, ctx)` (see `src/apps/lab/modes/types.ts`), and register it
+  in `src/apps/lab/modes/index.ts`. It shows up as a button in the lab.
 - **Elsewhere:** `src/maschine` has no dependencies; copy the folder.
 
 Only one page should drive the device at a time (two tabs both write to it).
@@ -83,8 +89,14 @@ Screen:
 
 ## Credits
 
+### flokapi
+
 This project started as a fork of [pymikro](https://github.com/flokapi/pymikro) by [flokapi](https://github.com/flokapi),
 a Python library for the Maschine Mikro MK3. The HID protocol (report layouts for lights, screen, pads and buttons)
 comes from their work. Thank you!
 
 Nomikro ports it to TypeScript/WebHID for the browser, verifies the details against the hardware, and adds the web app.
+
+### claude
+
+The AI agent helped a bit to rewrite all of the python code and everything else.

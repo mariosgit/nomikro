@@ -21,8 +21,12 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
   `device.ts` (open, input dispatch, output queue lights-before-screen), `lights.ts` (state = 0x80 report buffer,
   `pad()`/`strip()`/`button()`/`clear()`/`flush()`), `screen.ts`, `buttons.ts` / `pads.ts` (input decoding + report layouts),
   `hardware.ts` (ids, button/pad order, colors, `Color`/`LedButton` types)
-- `src/app/` React app: `App.tsx` (connect, mode runner), `modes/` (`index.ts` registry, `types.ts` contract,
-  `lightshow.ts`, `tests.ts` hardware tests)
+- `src/shell/` React shell: `App.tsx` (connect, header with app switcher, routing), `route.ts` (`#/<app>/<path>?<params>`),
+  `device.ts` (`useDeviceTask()`: runs device tasks one after another across all apps, releases callbacks + lights after),
+  `types.ts` (`AppDef` / `AppProps` contract), `index.css` (Tailwind v4, light/dark follows the system)
+- `src/apps/` **one folder per idea / app version**, registered in `src/apps/index.ts`:
+  - `lab/` light show + hardware test modes (`modes/`: `index.ts` registry, `types.ts` contract, `lightshow.ts`, `tests.ts`)
+  - `starter/` template for a new app (copy it)
 - `src/dev/devlog.ts` dev-only logging to the dev server
 - `examples/minimal/` framework-free example page (`/examples/minimal/`); new pages go into `build.rollupOptions.input`
 - `vite-plugins/hw-bridge.ts` dev server bridge (below)
@@ -35,15 +39,16 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
 - Use: vite typescript react.
 - App UI: tailwind or daisyUI as needed.
 
-- Do not commit anything, that's a check again feature for the chef.
+- Do not commit anything, that's a check feature for the chef.
 
 
 ## Dev loop
 
 **hw-bridge** (`vite-plugins/hw-bridge.ts`, dev server only) connects the terminal and the browser app:
-- Switch the app's mode: `curl 'localhost:9000/__hw/run?mode=<mode>&<params>'`. Modes are in `src/app/modes/`:
-  see the list below.
-- The app logs to `.devlog/hw.jsonl` (`devlog()` in `src/devlog.ts`): `connected`, `mode` (confirms a switch), `event` (test output,
+- Switch the lab mode: `curl 'localhost:9000/__hw/run?mode=<mode>&<params>'`. Modes are in `src/apps/lab/modes/`:
+  see the list below. Switch the app: `curl 'localhost:9000/__hw/run?app=<app>[&path=…]'`.
+- The app logs to `.devlog/hw.jsonl` (`devlog()` in `src/dev/devlog.ts`): `connected`, `task` (a device task started:
+  `lab/<mode>`, `starter`, …), `mode` (confirms a lab mode switch), `event` (test output,
   raw input hex in the input monitor), `error`. Check here first: `tail .devlog/hw.jsonl`.
 - After a config change the server restarts and the page reloads. Wait for a fresh `connected` line before sending a mode.
 - Inputs (pads/buttons/encoder) need a human. Ask the user, using the `input` mode. The input monitor logs raw hex;
@@ -62,6 +67,8 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
 4. Look at the device with the camera (below). Don't claim a visual change works without a shot.
 
 ## Camera feedback
+
+(might be available on linux dev machine)
 
 Single shot (creates `shot001.jpg`; skips 15 frames so exposure settles):
 

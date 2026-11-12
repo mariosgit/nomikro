@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import { hwBridge } from './vite-plugins/hw-bridge.ts';
 
 export default defineConfig({
@@ -7,6 +8,7 @@ export default defineConfig({
   base: './',
   plugins: [
     react(),
+    tailwindcss(),
     hwBridge(),
     {
       // Hot-swapping modules would leave a stale HID handle and a running show loop behind.

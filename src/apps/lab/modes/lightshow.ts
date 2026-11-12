@@ -1,4 +1,4 @@
-import { LED_BUTTONS as BUTTONS, PAD_COUNT, STRIP_LEDS, type Color, type MaschineMikroMk3 } from '../../maschine';
+import { LED_BUTTONS as BUTTONS, PAD_COUNT, STRIP_LEDS, type Color, type MaschineMikroMk3 } from '../../../maschine';
 
 type Lights = MaschineMikroMk3['lights'];
 

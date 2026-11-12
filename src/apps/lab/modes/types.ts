@@ -1,5 +1,5 @@
 // Mode contract: a mode owns the device while it runs. Add a mode = one file + one entry in ./index.ts.
-import type { MaschineMikroMk3 } from '../../maschine';
+import type { MaschineMikroMk3 } from '../../../maschine';
 
 export interface ModeContext {
     params: Record<string, string>;

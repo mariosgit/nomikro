@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { App } from './App';
+import './index.css';
 import { devlog } from '../dev/devlog';
 
 // Surface fire-and-forget failures (e.g. an un-awaited lights.flush()) in the dev log

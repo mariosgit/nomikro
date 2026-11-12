@@ -1,6 +1,6 @@
 // Hardware test modes: for checking the device on camera / with the dev log (see CLAUDE.md).
-import { COLORS, LED_BUTTONS, STRIP_LEDS, STRIP_MAX, type Color, type LedButton, type MaschineMikroMk3 } from '../../maschine';
-import { toHex } from '../../dev/devlog';
+import { COLORS, LED_BUTTONS, STRIP_LEDS, STRIP_MAX, type Color, type LedButton, type MaschineMikroMk3 } from '../../../maschine';
+import { toHex } from '../../../dev/devlog';
 import { untilAborted, type Mode, type ModeContext } from './types';
 
 /** Shows a static test frame and keeps it (incl. screen text) until aborted. */
