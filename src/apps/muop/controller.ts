@@ -15,11 +15,13 @@ import {
     degreeToMidi,
     isEmptyPattern,
     saveSong,
+    type FxHit,
     type Song,
     type Track,
     type TrackKind,
 } from './model';
-import { Sequencer, type Target } from './sequencer';
+import { Sequencer, fxKey, type Target } from './sequencer';
+import { FX, isTrackFx } from './fx';
 import { devlog } from '../../dev/devlog';
 import { Metronome } from '../../engine/metronome';
 import { DRUM_SOUNDS, soundsFor, type Sounds } from './sounds';
@@ -63,6 +65,8 @@ export interface MuOpView {
     cells: Cell[];
     /** Last display message. */
     message: string;
+    /** Punch-in FX active now (held + recorded on the current step), names. */
+    fx: string[];
 }
 
 type Layer = ReturnType<MaschineMikroMk3['lights']['layer']>;
@@ -97,6 +101,10 @@ export class MuOpController {
     /** Notes / chords step held in step mode: encoder edits it; a tap without edit on an existing one clears it. */
     private heldStep: { pad: number; created: boolean; edited: boolean } | null = null;
     private liveVoices = new Map<number, Voice[]>();
+    /** Pads held as punch-in FX (PERFORM + pad), released on padUp even after PERFORM was let go. */
+    private fxPads = new Map<number, FxHit>();
+    /** FX active on the last played step (recorded + live), for the lights / page. */
+    private stepFx: FxHit[] = [];
     private flashTimers = new Map<number, ReturnType<typeof setTimeout>>();
     private listeners = new Set<() => void>();
     private notifyQueued = false;
@@ -128,7 +136,8 @@ export class MuOpController {
         const offStep = this.seq.onStep((s) =>
             this.seq.clock.at(s.time, () => {
                 this.step = s.step;
-                if (!this.stepMode && !this.trackView() && !this.modifierView()) {
+                this.stepFx = s.fx;
+                if (!this.stepMode && !this.trackView() && !this.modifierView() && !this.fxView()) {
                     for (const pad of s.pads[this.track]) if (pad >= 0 && pad < 16) this.flash(pad, this.padColor(pad));
                 }
                 this.update();
@@ -261,8 +270,16 @@ export class MuOpController {
                 seq.stop();
                 this.step = -1;
                 return this.say('Stop');
+            case 'perform':
+                if (this.m.input.isHeld('erase')) {
+                    for (const hits of this.song.patterns[seq.pattern].fx) hits.length = 0;
+                    this.saveSoon();
+                    return this.say(`Erase FX\npattern ${seq.pattern + 1}`);
+                }
+                return;
             case 'rec':
                 this.recording = !this.recording;
+                seq.recordFx = this.recording;
                 return this.say(this.recording ? 'Record' : 'Record off');
             case 'pattern':
                 this.tapChain = [];
@@ -293,6 +310,7 @@ export class MuOpController {
             this.saveSoon();
             return this.say(`Copy ${this.seq.pattern + 1} > ${pad + 1}`);
         }
+        if (input.isHeld('perform')) return this.fxDown(pad);
         if (!kind) return;
         if (input.isHeld('erase')) {
             if (kind !== 'drums') {
@@ -339,7 +357,37 @@ export class MuOpController {
         this.flash(pad, this.padColor(pad), 0);
     }
 
+    /** PERFORM + pad: FX on while held (pads 1–8 on the selected track, 9–16 global). ERASE held: clear it instead. */
+    private fxDown(pad: number): void {
+        const def = FX[pad];
+        const hit: FxHit = isTrackFx(pad) ? { fx: pad, track: this.track } : { fx: pad };
+        if (hit.track !== undefined && !this.cur.kind) return this.say(`${this.label(this.track)}\nempty`);
+        const where = hit.track !== undefined ? ` · ${this.label(this.track)}` : '';
+        if (this.m.input.isHeld('erase')) {
+            for (const hits of this.song.patterns[this.seq.pattern].fx) {
+                const keep = hits.filter((h) => !(h.fx === hit.fx && h.track === hit.track));
+                hits.splice(0, hits.length, ...keep);
+            }
+            this.saveSoon();
+            return this.say(`Erase FX\n${def.name}${where}`);
+        }
+        this.fxPads.set(pad, hit);
+        this.seq.liveFx.set(fxKey(hit), hit);
+        // global FX start right away (while playing the sequencer keeps them in step from the next step on)
+        if (def.global) this.sounds.fx.engage(def.global, this.sounds.ctx.currentTime, this.seq.clock.stepDuration);
+        this.say(`FX ${def.name}${where}${this.recording && this.seq.playing ? ' (rec)' : ''}`);
+    }
+
+    private fxUp(pad: number): void {
+        const hit = this.fxPads.get(pad)!;
+        this.fxPads.delete(pad);
+        this.seq.liveFx.delete(fxKey(hit));
+        const id = FX[pad].global;
+        if (id) this.sounds.fx.release(id, this.sounds.ctx.currentTime);
+    }
+
     private padUp(pad: number): void {
+        if (this.fxPads.has(pad)) this.fxUp(pad);
         for (const v of this.liveVoices.get(pad) ?? []) v.release();
         this.liveVoices.delete(pad);
         if (!this.flashTimers.has(pad)) this.flashLayer.pad(pad, 'off');
@@ -417,6 +465,18 @@ export class MuOpController {
         return this.m.input.isHeld('pattern') || this.m.input.isHeld('duplicate');
     }
 
+    /** PERFORM held: the pads show the FX. */
+    private fxView(): boolean {
+        return this.m.input.isHeld('perform');
+    }
+
+    /** FX running now: held pads + recorded on the current step (while playing). */
+    private activeFx(): FxHit[] {
+        const live = [...this.fxPads.values()];
+        const recorded = this.seq.playing ? this.stepFx.filter((h) => !live.some((l) => l.fx === h.fx && l.track === h.track)) : [];
+        return [...live, ...recorded];
+    }
+
     /** SELECT held: the pads show the tracks. */
     private trackView(): boolean {
         return this.m.input.isHeld('select');
@@ -435,6 +495,12 @@ export class MuOpController {
         const kind = this.cur.kind;
         const all = (f: (i: number) => Cell) => Array.from({ length: 16 }, (_, i) => f(i));
 
+        if (this.fxView()) {
+            const active = this.activeFx();
+            return FX.map((def, i) =>
+                active.some((h) => h.fx === i && (h.track === undefined || h.track === this.track)) ? { color: 'white', level: 3 } : { color: def.color, level: 1 },
+            );
+        }
         if (this.trackView()) {
             return song.tracks.map((t, i) => (i === this.track ? { color: 'white', level: 3 } : t.kind ? { color: trackColor(t), level: 1 } : OFF));
         }
@@ -475,7 +541,7 @@ export class MuOpController {
         cells.forEach((c, i) => this.grid.pad(i, c.color, c.level));
 
         this.playhead.clear();
-        const showHead = this.stepMode && this.seq.playing && this.step >= 0 && !this.modifierView() && !this.trackView();
+        const showHead = this.stepMode && this.seq.playing && this.step >= 0 && !this.modifierView() && !this.trackView() && !this.fxView();
         if (showHead) this.playhead.pad(this.step, 'white', 3);
 
         const input = this.m.input;
@@ -493,6 +559,7 @@ export class MuOpController {
         l.button('search', input.isHeld('search') ? 4 : 1);
         l.button('star', this.sounds.isRandom(this.track) ? 3 : input.isHeld('star') ? 4 : 1);
         for (const b of MODIFIERS) l.button(b, input.isHeld(b) ? 4 : 1);
+        l.button('perform', input.isHeld('perform') ? 4 : this.activeFx().length ? 3 : 1);
         l.flush();
 
         if (showHead) cells[this.step] = { color: 'white', level: 3 };
@@ -557,6 +624,7 @@ export class MuOpController {
             step: this.step,
             cells,
             message: this.message,
+            fx: this.activeFx().map((h) => `${FX[h.fx].name}${h.track !== undefined ? ` (T${h.track + 1})` : ''}`),
         };
     }
 

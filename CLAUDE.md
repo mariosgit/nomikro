@@ -28,12 +28,12 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
   - `lab/` light show + hardware test modes (`modes/`: `index.ts` registry, `types.ts` contract, `lightshow.ts`, `tests.ts`)
   - `starter/` template for a new app (copy it)
   - `muop/` μOp, PO-style groovebox, 16 tracks (kinds drums / notes / chords), SELECT + pad selects (`model.ts` song data,
-    chords, v1 → v2 migration, localStorage, `sounds.ts` mixer: instrument per track + strip filter + volume,
-    `sequencer.ts` chain playback + quantized recording, `controller.ts` input mapping / lights / display, `index.tsx` page).
+    chords, v1 → v2 migration, localStorage, `sounds.ts` mixer: instrument per track + strip filter + FX bus + volume,
+    `sequencer.ts` chain playback + quantized recording + punch-in FX, `fx.ts` PERFORM FX table + track step remapping, `controller.ts` input mapping / lights / display, `index.tsx` page).
     Display messages go to the dev log (`event` with `app: 'muop'`).
 - `src/engine/` framework-free music engine: `clock.ts` (lookahead scheduler, worker tick, timebase performance.now() ms,
   `onStep` → `{index, time, duration}`, `at(time, fn)` for lights), `audio.ts` (shared AudioContext, `toAudioTime()`,
-  unlocked on the first click on the page: pad presses don't count as a user gesture), `metronome.ts`,
+  unlocked on the first click on the page: pad presses don't count as a user gesture), `metronome.ts`, `fx.ts` (master FX bus for punch-ins: sweeps, gate, pump, echo, reverb, crush, tape stop),
   `instruments/` (sound engines, chosen per track by id: `types.ts` `DrumKit` / `Melodic` contract + `DRUM_ROLES`,
   `basic.ts` plain Web Audio, `tone.ts` Tone.js on our AudioContext, loaded on demand; registry `DRUM_KITS` / `MELODIC` in `index.ts`)
 - `src/dev/devlog.ts` dev-only logging to the dev server

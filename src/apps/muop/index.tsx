@@ -7,6 +7,7 @@ import type { AppDef, AppProps } from '../../shell/types';
 import { MuOpController, trackColor, type Cell, type MuOpView } from './controller';
 import { chordName, degreeName, loadSong } from './model';
 import { DRUM_SOUNDS, Sounds, soundsFor } from './sounds';
+import { FX } from './fx';
 
 /** Pad numbers in screen order: top row first. Pad 0 = bottom left. */
 const PADS_TOP_DOWN = [12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3];
@@ -82,6 +83,7 @@ function MuOp({ maschine }: AppProps) {
                             v={`${v.chain.map((p) => p + 1).join(' ')}${v.pendingChain ? ` → next ${v.pendingChain.map((p) => p + 1).join(' ')}` : ''}`}
                         />
                         <Stat k="Tempo" v={`${v.bpm} BPM · swing ${v.swing}% · master volume ${Math.round(v.volume * 100)}`} />
+                        <Stat k="FX" v={v.fx.length ? v.fx.join(' · ') : '—'} />
                         <Stat k="Display" v={v.message.replace('\n', ' · ')} />
                     </dl>
                 ) : (
@@ -151,8 +153,22 @@ function MuOp({ maschine }: AppProps) {
                     <Help k="SHIFT + TAP" v="Metronome on/off (TAP blinks on the beat while on)" />
                     <Help k="SEARCH" v="Next sound for the current track (SHIFT + SEARCH: previous; also selectable in the track list)" />
                     <Help k="STAR" v="Random variation of the current track's sound: temporary, not saved (STAR lit while active, SEARCH or a reload goes back)" />
+                    <Help k="PERFORM + pad" v="Punch-in FX while held (pads show the FX, active = white). Pads 1–8 act on the selected track, 9–16 on the whole mix. Release PERFORM first to keep it until the pad is let go. PERFORM lit while an FX runs" />
+                    <Help k="REC + PERFORM + pad" v="While playing: the FX is recorded into the pattern's steps and comes back every loop" />
+                    <Help k="ERASE + PERFORM" v="Clear all recorded FX of the current pattern (ERASE + PERFORM + pad: only that FX)" />
                     <Help k="Button lights" v="Dim = usable, bright = active / held" />
                 </dl>
+                <h3 className="mt-4 mb-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">PERFORM pads (as on the device)</h3>
+                <div className="grid max-w-md grid-cols-4 gap-1.5">
+                    {PADS_TOP_DOWN.map((pad) => (
+                        <div key={pad} className="rounded-md border-l-4 bg-zinc-100 px-2 py-1 text-xs dark:bg-zinc-800" style={{ borderColor: CSS[FX[pad].color] }}>
+                            <span className="text-zinc-500 dark:text-zinc-400">{pad + 1}</span> {FX[pad].name}
+                        </div>
+                    ))}
+                </div>
+                <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                    1–8 selected track: loops repeat the last 1/2/4/8 steps, retrig repeats the step 2×/3×, reverse plays backwards, half time stretches. 9–16 mix: filter sweeps over a bar, gate chops 1/16, pump ducks every beat, echo is dotted 1/8, slow down = tape stop.
+                </p>
             </section>
         </div>
     );

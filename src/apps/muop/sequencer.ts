@@ -1,7 +1,9 @@
 // μOp sequencer: plays the song's pattern chain on the clock, records live hits quantized to the nearest step.
 import { Clock } from '../../engine/clock';
 import { toAudioTime } from '../../engine/audio';
-import { DRUMS, STEPS, chordNotes, degreeToMidi, type Song } from './model';
+import { DRUMS, STEPS, chordNotes, degreeToMidi, type FxHit, type Song } from './model';
+import { FX, TrackFx } from './fx';
+import type { MasterFxId } from '../../engine/fx';
 import type { Sounds } from './sounds';
 
 export interface PlayedStep {
@@ -11,7 +13,17 @@ export interface PlayedStep {
     step: number;
     /** Per track: the pads that played (drum sounds / note degrees / chord numbers), for flashing them. */
     pads: number[][];
+    /** FX active on this step (recorded + live). */
+    fx: FxHit[];
 }
+
+/** Adds an FX hit to a step's list, once. */
+function addFx(hits: FxHit[], hit: FxHit): void {
+    if (!hits.some((h) => h.fx === hit.fx && h.track === hit.track)) hits.push({ ...hit });
+}
+
+/** Key of a live FX: global "fx", track FX "fx:track". */
+export const fxKey = (hit: FxHit) => (hit.track === undefined ? `${hit.fx}` : `${hit.fx}:${hit.track}`);
 
 /** Where a live hit goes: a drum sound of a drums track, or the note row of a notes / chords track. */
 export type Target = { track: number; sound?: number };
@@ -28,6 +40,12 @@ export class Sequencer {
     private recent: { time: number; pattern: number; step: number; duration: number }[] = [];
     /** Recorded notes that already sounded live: skip them on their first scheduled play. */
     private skip = new Set<string>();
+    /** Punch-in FX held right now (PERFORM + pad), by fxKey(). */
+    readonly liveFx = new Map<string, FxHit>();
+    /** Write held FX into the pattern (REC on). */
+    recordFx = false;
+    /** Running track FX, per track. */
+    private trackFx = new Map<number, TrackFx>();
     private listeners = new Set<(s: PlayedStep) => void>();
 
     constructor(
@@ -63,11 +81,13 @@ export class Sequencer {
     /** Stops, keeps the position (start() resumes). */
     pause(): void {
         this.clock.stop();
+        this.releaseFx();
     }
 
     /** Stops and rewinds to the first step of the chain. */
     stop(): void {
         this.clock.stop();
+        this.releaseFx();
         this.nextStep = 0;
         this.chainPos = 0;
         this.applyPendingChain();
@@ -114,30 +134,72 @@ export class Sequencer {
         const p = this.song.patterns[pattern];
         const t = toAudioTime(time);
 
+        // punch-in FX: recorded on this step ∪ held live (later entries win for track FX)
+        if (this.recordFx) for (const hit of this.liveFx.values()) addFx(p.fx[step], hit);
+        const active = [...p.fx[step], ...this.liveFx.values()];
+        this.applyFx(active, index, pattern, step, t, duration);
+
         const length = (duration * 0.85) / 1000;
         const pads = this.song.tracks.map((track, i): number[] => {
-            const steps = p.tracks[i];
+            if (track.kind === null) return [];
+            const src = this.trackFx.get(i)?.source(index) ?? (this.trackFx.has(i) ? null : { pattern, step, hits: 1 });
+            if (!src) return []; // half time: silent step
+            const steps = this.song.patterns[src.pattern].tracks[i];
+            const hitLength = length / src.hits;
+            const at = (h: number) => t + (h * duration) / 1000 / src.hits;
             if (track.kind === 'drums') {
                 const hit: number[] = [];
                 for (let sound = 0; sound < DRUMS; sound++) {
-                    const v = steps.drums[sound][step];
-                    if (v > 0 && !this.skip.delete(this.key(pattern, step, { track: i, sound }))) {
-                        this.sounds.drum(i, sound, t, v);
+                    const v = steps.drums[sound][src.step];
+                    if (v > 0 && !this.skip.delete(this.key(src.pattern, src.step, { track: i, sound }))) {
+                        for (let h = 0; h < src.hits; h++) this.sounds.drum(i, sound, at(h), v);
                         hit.push(sound);
                     }
                 }
                 return hit;
             }
-            const n = steps.notes[step];
-            if (track.kind === null || n === null || this.skip.delete(this.key(pattern, step, { track: i }))) return [];
+            const n = steps.notes[src.step];
+            if (n === null || this.skip.delete(this.key(src.pattern, src.step, { track: i }))) return [];
             const midis = track.kind === 'chords' ? chordNotes(n, track.octave) : [degreeToMidi(n, track.octave)];
-            for (const midi of midis) this.sounds.note(i, midi, t, 0.8, length);
+            for (let h = 0; h < src.hits; h++) for (const midi of midis) this.sounds.note(i, midi, at(h), 0.8, hitLength);
             return [n];
         });
 
         this.recent.push({ time, pattern, step, duration });
         if (this.recent.length > 8) this.recent.shift();
-        for (const l of this.listeners) l({ time, pattern, step, pads });
+        for (const l of this.listeners) l({ time, pattern, step, pads, fx: active });
+    }
+
+    /** Engages / releases FX for this step: track FX remap steps, global FX drive the master bus (and the clock). */
+    private applyFx(active: FxHit[], index: number, pattern: number, step: number, t: number, duration: number): void {
+        const wanted = new Map<number, number>(); // track → fx (the last one wins)
+        const globals = new Set<MasterFxId>();
+        for (const hit of active) {
+            if (hit.track !== undefined) wanted.set(hit.track, hit.fx);
+            else if (FX[hit.fx]?.global) globals.add(FX[hit.fx].global!);
+        }
+        for (const track of [...this.trackFx.keys()]) if (!wanted.has(track)) this.trackFx.delete(track);
+        for (const [track, fx] of wanted) {
+            if (this.trackFx.get(track)?.fx !== fx) this.trackFx.set(track, new TrackFx(fx, index, pattern, step));
+        }
+
+        const bus = this.sounds.fx;
+        for (const def of FX) {
+            if (!def.global) continue;
+            if (globals.has(def.global)) bus.engage(def.global, t, duration);
+            else bus.release(def.global, t);
+        }
+        bus.step(t, duration, index);
+        // slow down: the tempo sinks step by step, back to the song tempo on release
+        this.clock.bpm = bus.isActive('slow') ? Math.max(this.song.bpm * 0.25, this.clock.bpm * 0.8) : this.song.bpm;
+    }
+
+    /** Ends all FX now (stop / pause). Recorded FX stay in the pattern. */
+    private releaseFx(): void {
+        this.trackFx.clear();
+        const now = this.sounds.ctx.currentTime;
+        for (const def of FX) if (def.global) this.sounds.fx.release(def.global, now);
+        this.clock.bpm = this.song.bpm;
     }
 
     private advanceChain(): void {

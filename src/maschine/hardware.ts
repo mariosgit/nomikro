@@ -6,7 +6,7 @@ export const PRODUCT_ID = 0x1700;
 /** Bit order of the buttons in the input report (0x01). */
 export const BUTTONS = [
     'project', 'star', 'search', 'volume', 'swing', 'tempo', 'plug_in', 'sampling',
-    'arrow_left', 'arrow_right', 'pitch', 'mod', 'perfrom', 'notes', 'group', 'auto',
+    'arrow_left', 'arrow_right', 'pitch', 'mod', 'perform', 'notes', 'group', 'auto',
     'lock', 'note_repeat', 'restart', 'erase', 'tap', 'follow', 'play', 'rec',
     'stop', 'shift', 'fixed_vel', 'pad_mode', 'keyboard', 'chords', 'step', 'scene',
     'pattern', 'events', 'variation', 'duplicate', 'select', 'solo', 'mute',

@@ -1,7 +1,9 @@
 # Nomikro
 
-Port of [Pymikro](#pymikro) to the browser: control a **Maschine Mikro MK3** from a web app
+Control a **Maschine Mikro MK3** from a web app
 via **WebHID** (TypeScript, Vite, React ...).
+
+Port of [Pymikro](#pymikro) to the browser.
 
 ## Get started
 
@@ -34,7 +36,7 @@ src/
   apps/            one folder per idea / app version, registered in apps/index.ts
     lab/           light show + hardware test modes
     starter/       template for a new app
-    muop/          MüOp: PO-style groovebox (drums + melody, 16 patterns, chains)
+    muop/          μOp: PO-style groovebox (16 tracks, 16 patterns, chains, punch-in FX)
   engine/          music engine, framework-free: clock (lookahead scheduler), audio timing, metronome,
                    instruments/ (sound engines per track: basic Web Audio, Tone.js)
   dev/             dev-only helpers (log to the dev server)
@@ -99,6 +101,10 @@ a Python library for the Maschine Mikro MK3. The HID protocol (report layouts fo
 comes from their work. Thank you!
 
 Nomikro ports it to TypeScript/WebHID for the browser, verifies the details against the hardware, and adds the web app.
+
+### tone.js
+
+Used as sound engine. Cool stuff.
 
 ### claude
 

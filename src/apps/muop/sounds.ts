@@ -1,8 +1,9 @@
 // μOp sound: one instrument per track (chosen from the engine registry, src/engine/instruments/),
-// each → track gain (track volume) → low-pass (touch strip) → master gain (volume) → speakers.
+// each → track gain (track volume) → low-pass (touch strip) → punch-in FX bus → master gain (volume) → speakers.
 import type { Color } from '../../maschine';
 import { DRUM_KITS, DRUM_ROLES, MELODIC, findInstrument, type DrumKit, type InstrumentDef, type Melodic, type Voice } from '../../engine/instruments';
 import type { TrackKind } from './model';
+import { MasterFx } from '../../engine/fx';
 
 const DRUM_COLORS: Color[] = ['red', 'orange', 'yellow', 'lime', 'cyan', 'blue', 'violet', 'magenta'];
 export const DRUM_SOUNDS = DRUM_ROLES.map((name, i) => ({ name, color: DRUM_COLORS[i] }));
@@ -28,13 +29,17 @@ interface Slot {
 export class Sounds {
     private master: GainNode;
     private filter: BiquadFilterNode;
+    /** Punch-in FX on the whole mix (PERFORM + pads 9–16). */
+    readonly fx: MasterFx;
     private disposed = false;
     private slots = new Map<number, Slot>();
 
     constructor(readonly ctx: AudioContext) {
         this.filter = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: OPEN, Q: 4 });
         this.master = new GainNode(ctx, { gain: 0.8 });
-        this.filter.connect(this.master).connect(ctx.destination);
+        this.fx = new MasterFx(ctx);
+        this.filter.connect(this.fx.input);
+        this.fx.output.connect(this.master).connect(ctx.destination);
     }
 
     /** True while the track plays a random variation (STAR). */

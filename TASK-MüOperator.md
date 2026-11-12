@@ -23,7 +23,12 @@ Mapping and controls: see the page (cheat sheet) and `src/apps/muop/controller.t
 - Metronome: SHIFT + TAP (shared engine part, `src/engine/metronome.ts`).
 
 ## v2 ideas (suggested order)
-- [ ] PERFORM + pad: punch-in FX (stutter / retrigger, filter sweeps, glitch), next up
+- [x] PERFORM + pad: punch-in FX, momentary (PO style). Pads 1–8 on the selected track (`src/apps/muop/fx.ts`: loop 1/2/4/8,
+  retrig ×2/×3, reverse, half time = step remapping, the song position runs on underneath), pads 9–16 on the mix
+  (`src/engine/fx.ts` master bus: LP / HP sweep, gate, pump, echo, reverb, crush, slow down / tape stop).
+  REC on while playing = recorded into the pattern (`Pattern.fx[step]`), ERASE + PERFORM (+ pad) clears.
+- [ ] FX ideas for later: touch strip as FX amount (sweep position / echo feedback), more track FX (octave up, random steps),
+  per-track sends instead of the whole mix
 - [x] Sound engine per track: `src/engine/instruments/` (basic, Tone.js), page select or SEARCH,
   stored in the song per track.
 - [x] SEARCH = next sound for the current track (SHIFT = previous), STAR = random variation (temporary, not saved),
@@ -38,6 +43,17 @@ Mapping and controls: see the page (cheat sheet) and `src/apps/muop/controller.t
 - [ ] Track names / octave editable (e.g. SHIFT + encoder = octave), more chord voicings (inversions, sus)
 - [ ] Variable note length (notes / chords): today every note lasts 0.85 step. Store a length per step
   (e.g. hold a step + another step = tie / length, or a gate value per step); live recording keeps how long the pad was held.
+- [ ] More random, more fun: pattern randomization / generative patterns (STAR + PATTERN or similar, per track):
+  - drums à la Mutable Instruments **Grids**: a 2D map of drum patterns (X/Y = style), per-voice density → pick / morph
+    patterns with the encoder or the touch strip.
+  - notes / chords à la **Marbles**: random rhythm (density, bias, jitter) + random notes quantized to the scale
+    (spread, bias, steps), "déjà vu" = how much the random sequence loops vs. changes.
+  - Source: `../MI-Eurorack` (fork of pichenettes/eurorack). Licenses (checked in the README + file headers):
+    - Marbles (`marbles/random/`: `t_generator`, `x_y_generator`, `quantizer`, …): **MIT**, can be ported, keep the copyright notice.
+    - Grids (`grids/pattern_generator.cc`, `grids/resources.cc` = the pattern map): **GPL-3.0** (AVR project). Porting code
+      or the map data makes μOp GPL-3 (nomikro is LGPL-2.1). Alternative: own implementation of the idea (density
+      thresholds over a map of patterns) with our own pattern data.
+    - Trademark: don't use "Mutable Instruments" or the module names (Grids, Marbles) as names in the app.
 - [ ] MUTE / SOLO + pad: per track (pads show the tracks like SELECT), per drum sound on a drums track
 - [ ] Per-step parameter locks (hold step + encoder for drums: pitch / decay)
 - [ ] Sound parameters per drum / lead (encoder without modifier)

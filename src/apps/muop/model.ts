@@ -28,8 +28,16 @@ export interface PatternTrack {
     notes: (number | null)[];
 }
 
+/** A recorded punch-in FX on a step: FX number 0..15 (see fx.ts), `track` for the track FX (pads 1–8). */
+export interface FxHit {
+    fx: number;
+    track?: number;
+}
+
 export interface Pattern {
     tracks: PatternTrack[];
+    /** [step]: punch-in FX recorded on that step (REC + PERFORM). */
+    fx: FxHit[][];
 }
 
 export interface Song {
@@ -60,14 +68,18 @@ export const emptyPatternTrack = (): PatternTrack => ({
     notes: Array<number | null>(STEPS).fill(null),
 });
 
-export const emptyPattern = (): Pattern => ({ tracks: Array.from({ length: TRACKS }, emptyPatternTrack) });
+export const emptyPattern = (): Pattern => ({
+    tracks: Array.from({ length: TRACKS }, emptyPatternTrack),
+    fx: Array.from({ length: STEPS }, () => []),
+});
 
 export const clonePattern = (p: Pattern): Pattern => ({
     tracks: p.tracks.map((t) => ({ drums: t.drums.map((row) => [...row]), notes: [...t.notes] })),
+    fx: p.fx.map((hits) => hits.map((h) => ({ ...h }))),
 });
 
 export const isEmptyTrack = (t: PatternTrack) => t.drums.every((row) => row.every((v) => v === 0)) && t.notes.every((d) => d === null);
-export const isEmptyPattern = (p: Pattern) => p.tracks.every(isEmptyTrack);
+export const isEmptyPattern = (p: Pattern) => p.tracks.every(isEmptyTrack) && p.fx.every((hits) => !hits.length);
 
 /** A new song with a starter groove in pattern 1. */
 export function newSong(): Song {
@@ -174,7 +186,10 @@ export function loadSong(): Song {
         const raw = localStorage.getItem(KEY);
         if (raw) {
             const s = JSON.parse(raw) as Song;
-            if (s.version === 2 && s.tracks?.length === TRACKS && s.patterns?.length === PATTERNS && s.chain?.length) return s;
+            if (s.version === 2 && s.tracks?.length === TRACKS && s.patterns?.length === PATTERNS && s.chain?.length) {
+                for (const p of s.patterns) p.fx ??= Array.from({ length: STEPS }, () => []); // saved before punch-in FX
+                return s;
+            }
         }
         const v1 = localStorage.getItem(KEY_V1);
         if (v1) {
