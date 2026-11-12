@@ -56,7 +56,7 @@ export class MaschineMikroMk3 {
 
     async openDevice(device: HIDDevice): Promise<void> {
         this.hid = device;
-        await this.hid.open();
+        if (!this.hid.opened) await this.hid.open();
         this.hid.oninputreport = this.handleInputReport.bind(this);
 
         navigator.hid.addEventListener('disconnect', (event: HIDConnectionEvent) => {

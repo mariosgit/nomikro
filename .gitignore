@@ -165,3 +165,8 @@ cython_debug/
 
 node_modules/
 dist/
+
+# camera feedback shots
+shot*.jpg
+seq*.jpg
+contact*.jpg

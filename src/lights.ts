@@ -70,7 +70,7 @@ export class Lights {
             if (elemNb !== null && elemNb >= 0) {
                 const byte = this.getColorByte(elemType, elem);
                 buf[offset + elemNb] = byte;
-                console.log(`Setting ${elemType} ${elemRef} to color ${elem.color}, value ${elem.val}, nb ${elemNb}, byte ${byte}`);
+                // console.log(`Setting ${elemType} ${elemRef} to color ${elem.color}, value ${elem.val}, nb ${elemNb}, byte ${byte}`);
             } else {
                 console.warn(`Unknown ${elemType} reference: ${elemRef}`);
             }

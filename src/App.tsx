@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { MaschineMikroMk3 } from './maschine_mikro_mk3';
 import settings from './maschine_mikro_mk3.json';
+import { runLightShow } from './lightshow';
 
 async function demoLights(maschine: MaschineMikroMk3): Promise<void> {
     const state = {
@@ -50,39 +51,52 @@ export function App() {
     const [connected, setConnected] = useState(false);
     const [status, setStatus] = useState('');
     const [maschine, setMaschine] = useState<MaschineMikroMk3 | null>(null);
+    const showRef = useRef<AbortController | null>(null);
 
     const vid = parseInt(settings.vid, 16);
     const pid = parseInt(settings.pid, 16);
 
+    const startShow = (m: MaschineMikroMk3) => {
+        showRef.current?.abort();
+        const ctrl = new AbortController();
+        showRef.current = ctrl;
+        runLightShow(m, ctrl.signal).catch((error) => console.error('Light show failed:', error));
+    };
+
+    const stopShow = () => {
+        showRef.current?.abort();
+        showRef.current = null;
+    };
+
+    const connectDevice = async (device: HIDDevice) => {
+        try {
+            setStatus('Connecting Maschine Mikro MK3...');
+            const newMaschine = new MaschineMikroMk3();
+            await newMaschine.openDevice(device);
+            setMaschine(newMaschine);
+            setConnected(true);
+            setStatus('Connected! Running light show...');
+
+            demoBtnPad(newMaschine);
+            startShow(newMaschine);
+        } catch (error) {
+            setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            console.error(error);
+        }
+    };
+
     useEffect(() => {
-        const handleDeviceConnect = async (event: HIDConnectionEvent) => {
+        const isMaschine = (device: HIDDevice) => device.vendorId === vid && device.productId === pid;
+
+        const handleDeviceConnect = (event: HIDConnectionEvent) => {
             console.log('Device connected:', event.device.productName);
-            if (event.device.vendorId === vid && event.device.productId === pid) {
-                console.log('Maschine Mikro MK3 detected! Auto-connecting...');
-                try {
-                    setStatus('Auto-connecting Maschine Mikro MK3...');
-                    const newMaschine = new MaschineMikroMk3();
-                    console.log(event.device);
-                    await newMaschine.openDevice(event.device);
-                    setMaschine(newMaschine);
-                    setConnected(true);
-                    setStatus('Connected! Running demo...');
-
-                    demoLights(newMaschine);
-                    demoScreen(newMaschine);
-                    demoBtnPad(newMaschine);
-
-                } catch (error) {
-                    setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-                    console.error(error);
-                }
-            }
+            if (isMaschine(event.device)) connectDevice(event.device);
         };
 
         const handleDeviceDisconnect = (event: HIDConnectionEvent) => {
             console.log('Device disconnected:', event.device.productName);
-            if (event.device.vendorId === vid && event.device.productId === pid) {
-                console.log('Maschine Mikro MK3 disconnected');
+            if (isMaschine(event.device)) {
+                stopShow();
                 setConnected(false);
                 setMaschine(null);
                 setStatus('Device disconnected');
@@ -92,26 +106,17 @@ export function App() {
         navigator.hid.addEventListener('connect', handleDeviceConnect);
         navigator.hid.addEventListener('disconnect', handleDeviceDisconnect);
 
-        if (maschine && connected) {
-            // console.log('Device already connected, running demo...');
-            // demoLights(maschine);
-            // demoScreen(maschine);
-            // demoBtnPad(maschine);
-        } else {
-            navigator.hid.getDevices().then(async (devices) => {
-                console.log('Checking for already connected devices...', devices);
-                const maschineDevice = devices.find(
-                    (device) => device.vendorId === vid && device.productId === pid
-                );
-                if (maschineDevice) {
-                    console.log('Maschine Mikro MK3 already connected! Auto-connecting...');
-                    await handleDeviceConnect({ device: maschineDevice } as HIDConnectionEvent);
-                }
-            });
-        }
-
+        // Auto-connect if permission was granted before (survives page reloads)
+        navigator.hid.getDevices().then((devices) => {
+            const device = devices.find(isMaschine);
+            if (device) {
+                console.log('Maschine Mikro MK3 already permitted, auto-connecting...');
+                connectDevice(device);
+            }
+        });
 
         return () => {
+            stopShow();
             navigator.hid.removeEventListener('connect', handleDeviceConnect);
             navigator.hid.removeEventListener('disconnect', handleDeviceDisconnect);
         };
@@ -119,16 +124,8 @@ export function App() {
 
     const handleConnect = async () => {
         try {
-            // setStatus('Connecting...');
-            // const newMaschine = new MaschineMikroMk3();
-            // await newMaschine.connect();
-            // setMaschine(newMaschine);
-            // setConnected(true);
-            // setStatus('Connected! Running demo...');
-
-            // await demoLights(newMaschine);
-            // await demoScreen(newMaschine);
-            // await demoBtnPad(newMaschine);
+            const [device] = await navigator.hid.requestDevice({ filters: [{ vendorId: vid, productId: pid }] });
+            if (device) await connectDevice(device);
         } catch (error) {
             setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
             console.error(error);
@@ -140,6 +137,9 @@ export function App() {
             <h1>Maschine Mikro MK3 - WebHID Demo</h1>
             <button onClick={handleConnect} disabled={connected}>
                 {connected ? 'Connected' : 'Connect to Device'}
+            </button>{' '}
+            <button onClick={() => (showRef.current ? stopShow() : maschine && startShow(maschine))} disabled={!connected}>
+                Start / stop light show
             </button>
             {status && <p>{status}</p>}
             <div id="output"></div>
