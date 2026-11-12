@@ -8,7 +8,7 @@
 // The tick runs in a worker: main-thread timers in hidden tabs are throttled to 1 Hz (and to 1/min after 5 min).
 
 export interface ClockStep {
-    /** Running step counter since start(), 0-based. */
+    /** Running step counter, from the start() index on. */
     index: number;
     /** When the step plays, performance.now() ms (swing included). */
     time: number;
@@ -40,6 +40,9 @@ export class Clock {
     lookahead: number;
     tick: number;
 
+    /** Index passed to the last start(). */
+    startIndex = 0;
+
     private listeners = new Set<StepListener>();
     private worker: Worker | null = null;
     private nextIndex = 0;
@@ -70,10 +73,14 @@ export class Clock {
         return () => this.listeners.delete(listener);
     }
 
-    /** Starts at step 0, `delay` ms from now (default: one lookahead, leaves room for startup work). */
-    start(delay = this.lookahead): void {
+    /**
+     * Starts at step `index` (default 0), `delay` ms from now (default: one lookahead, leaves room for startup work).
+     * Resume after a pause with the next index, so swing stays on the same steps.
+     */
+    start(index = 0, delay = this.lookahead): void {
         this.stop();
-        this.nextIndex = 0;
+        this.startIndex = index;
+        this.nextIndex = index;
         this.nextGrid = performance.now() + delay;
         const url = URL.createObjectURL(new Blob([TICKER_SOURCE], { type: 'text/javascript' }));
         this.worker = new Worker(url);

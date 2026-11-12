@@ -27,6 +27,9 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
 - `src/apps/` **one folder per idea / app version**, registered in `src/apps/index.ts`:
   - `lab/` light show + hardware test modes (`modes/`: `index.ts` registry, `types.ts` contract, `lightshow.ts`, `tests.ts`)
   - `starter/` template for a new app (copy it)
+  - `muop/` MüOp, PO-style groovebox (`model.ts` song data + localStorage, `sounds.ts` Web Audio drums + lead,
+    `sequencer.ts` chain playback + quantized recording, `controller.ts` input mapping / lights / display, `index.tsx` page).
+    Display messages go to the dev log (`event` with `app: 'muop'`).
 - `src/engine/` framework-free music engine: `clock.ts` (lookahead scheduler, worker tick, timebase performance.now() ms,
   `onStep` → `{index, time, duration}`, `at(time, fn)` for lights), `audio.ts` (shared AudioContext, `toAudioTime()`,
   unlocked on the first click on the page: pad presses don't count as a user gesture)
@@ -44,6 +47,20 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
 
 - Do not commit anything, that's a check feature for the chef.
 
+
+## App conventions (every app in `src/apps/`)
+
+- **Metronome:** SHIFT + TAP toggles it (printed "TAP / Metro"). Use `Metronome` from `src/engine/metronome.ts`
+  (`metronome.attach(clock)`); the on/off setting is shared across apps. TAP lit while on, blinking on the beat.
+- **Button backlight:** every button the app uses is lit dim (level 1), active / held ones bright (4), unused ones off.
+  SHIFT dim when the app has SHIFT combos. Modifiers (hold + pad / encoder) light bright while held.
+- **Guide on the app page:** a "Controls" cheat sheet listing every button / pad / encoder / strip function,
+  incl. SHIFT + TAP and the light meaning. Keep it in sync with the mapping.
+- **Display:** short message on every change (`screen.set`, debounced), it auto-blanks after 3 s. Never on every input event.
+- **Audio:** show "click to enable audio" on the page while the AudioContext isn't running (pads don't unlock it).
+- **Device ownership:** drive the device via `useDeviceTask()`; use light layers (`m.lights.layer()`) for grid / playhead /
+  feedback so they don't wipe each other.
+- Reference implementation: `src/apps/muop/`.
 
 ## Dev loop
 

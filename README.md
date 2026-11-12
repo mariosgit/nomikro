@@ -34,6 +34,7 @@ src/
   apps/            one folder per idea / app version, registered in apps/index.ts
     lab/           light show + hardware test modes
     starter/       template for a new app
+    muop/          MüOp: PO-style groovebox (drums + melody, 16 patterns, chains)
   engine/          music engine, framework-free: clock (lookahead scheduler), audio context / timing
   dev/             dev-only helpers (log to the dev server)
 examples/

@@ -3,8 +3,10 @@
 import type { AppDef } from '../shell/types';
 import { lab } from './lab';
 import { starter } from './starter';
+import { muop } from './muop';
 
 export const APPS = {
+    muop,
     lab,
     starter,
 } satisfies Record<string, AppDef>;
