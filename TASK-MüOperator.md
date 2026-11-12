@@ -43,6 +43,35 @@ Mapping and controls: see the page (cheat sheet) and `src/apps/muop/controller.t
   - 13 Semitone −, 14 Semitone +: transpose (song key / track); 15 Octave −, 16 Octave +: the track's octave
     (also covers "octave editable" below).
   - SHIFT + pad must keep pads silent; the pads show the 16 functions dimmed while SHIFT is held.
+- [ ] Key and root note: today everything is fixed to A minor (`SCALE` / `ROOT` in `model.ts`). Song setting for the
+  root (C..B) and the scale (minor, major, dorian, pentatonic, …); pads and chords follow. Steps store scale degrees,
+  so changing the key transposes the song without breaking it. Semitone ± (SHIFT + pad 13/14) could set the root.
+- [ ] Harmony helper for music noobs: one track leads the harmony (the chords track, or the bass), and the
+  other note tracks follow it. Ideas:
+  - the chord on a step sets the "current chord"; bass / lead pads are mapped to that chord's notes (or the scale
+    with the chord tones highlighted on the pads), so nothing sounds wrong.
+  - auto bass: the bass plays the chord root on its steps (degree 0 = the chord root), octave and fifth as variations.
+  - the same for the random / generative patterns: notes are drawn from the current chord.
+  - Per track switch: "free" (scale) / "follow" (chord tones), shown on the page and the display.
+- [ ] Transpose track (idea from Performer's routing: source → target `Transpose` on a track mask,
+  `../performer/src/apps/sequencer/model/Routing.h`): **track 16 = transpose track**, kind `'transpose'`, silent.
+  - Its notes are scale degrees (0 = no change); the degree on the current step is added to the notes of the target
+    tracks (a set of tracks, e.g. SELECT-style pad view to toggle them; default: all note / chord tracks, not drums).
+  - Stays in the scale (degree 3 turns an Am riff into Dm). The value holds until the next note (empty steps keep it).
+  - Combines with "follow": the chords track could also act as the transpose source; per target "transpose" / "follow".
+- [ ] Chord suggestions (idea from Floyd Steinberg's "Chorder",
+  https://www.floydsteinberg.com/extension/www.floydsteinberg.com/webmidi/chorder/chorder.html, no license on its JS:
+  take the idea, write our own):
+  - next chords = weighted moves from the current root: V +7 (1.0), IV +5 (0.9), vi +9 (0.85), ii +2 (0.75),
+    vii° +11 (0.7), secondary dominant (0.65), iii +4 (0.6), color chords same root (0.5), chromatic ±1 dom7 (0.4).
+  - probable key = how many chords of the history fit each of the 24 keys; group suggestions into diatonic /
+    functional (secondary dominants) / related keys / chromatic.
+  - passing chord: dom7 a semitone below the target (or a tritone away before a dom7).
+  - μOp: on the chords track, after a chord the pads of likely next chords light brighter; random chord fill along
+    the weights (pattern randomization); secondary dominants / passing chords once chords outside the scale exist.
+- [ ] Clock multiplier / divider per track (Performer: per-track divisor): e.g. ×2, ×1, ÷2, ÷4, ÷16 steps per clock
+  step. A transpose track at ÷4 or ÷16 = one step per beat / bar → a 16-step progression over 4 or 16 bars of a
+  one-bar riff. Also for drums (double-time hats, half-time patterns), polymeter with per-track pattern length later.
 - [ ] Other printed second functions to consider: ERASE / Replace (record overwrites), REC / Count-In,
   RESTART / Loop, FOLLOW / Grid (quantize grid), DUPLICATE / Double (pattern length ×2), MUTE / Choke,
   FIXED VEL / 16 Vel (pads = one sound at 16 velocities), NOTE REPEAT / Arp, VARIATION (random variation, see the
@@ -50,6 +79,17 @@ Mapping and controls: see the page (cheat sheet) and `src/apps/muop/controller.t
 - [ ] Sound presets: save a sound (engine + settings, e.g. a STAR result you like) under a name, browse them with SEARCH.
 - [ ] Sound tuning: rework the sounds that feel weak (needs listening feedback, `src/engine/instruments/`)
 - [ ] More engines: samples (drum kits as WAV/OGG one-shots), smplr, Faust / AudioWorklet, MIDI out as an "instrument"
+- [ ] Mutable Instruments DSP as engines (`../MI-Eurorack`, STM32 projects = **MIT**, keep the copyright notice; don't use
+  the brand / module names as product names). C++ → WebAssembly (Emscripten, not installed yet; commit the built `.wasm`)
+  → AudioWorklet node per track, behind the existing `Melodic` / `DrumKit` contract (SEARCH / STAR / page select work as is).
+  - **Plaits** first: float DSP at 48 kHz, 16 engines incl. bass drum / snare / hi-hat models → melodic instruments + a
+    drum kit from one port. Monophonic: one instance per voice (chords). Harmonics / timbre / morph → STAR, later p-locks,
+    strip / encoder for live morph.
+  - **Rings** (resonator, 48 kHz): pads / plucks, also as an effect on other tracks.
+  - **Elements** (32 kHz internal, heavier CPU): one voice per track, needs resampling.
+  - **Braids** (96 kHz, integer DSP): low priority, Plaits covers most of it.
+  - Watch: sample-accurate note starts inside the 128-sample worklet block (Plaits renders 12–24-sample blocks),
+    wasm size (speech / wavetable data).
 - [x] 16 tracks, SELECT + pad selects (pads show the tracks while held). Track kinds: drums / notes / chords.
   T1 Drums, T2 Bass (notes, octave -1, Sub lead), T3 Chords (Pad), T4 Lead; PAD MODE / KEYBOARD (bass ↔ lead) / CHORDS
   are shortcuts. Chords: pads 1–8 diatonic triads, 9–16 seventh chords (A minor). v1 songs migrate (drums → T1, melody → T4).

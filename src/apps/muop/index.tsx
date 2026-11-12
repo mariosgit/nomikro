@@ -241,6 +241,7 @@ const Help = ({ k, v }: { k: string; v: string }) => (
 
 export const muop: AppDef = {
     label: 'μOp',
+    title: 'μOp - The μcroOperator',
     description: 'The μcroOperator: PO-style groovebox, 16 tracks (drums, bass, chords, lead), 16 patterns, chains.',
     Component: MuOp,
 };

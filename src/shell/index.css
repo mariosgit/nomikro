@@ -1,5 +1,9 @@
 @import 'tailwindcss';
 
+/* Tailwind scans every project file for class names; docs aren't app code. Without this, saving a .md file
+   invalidates the CSS and the dev server reloads the page (and restarts the app on the device). */
+@source not '../../**/*.md';
+
 /* Light/dark follows the system setting: Tailwind's `dark:` variant uses prefers-color-scheme by default. */
 :root {
     color-scheme: light dark;

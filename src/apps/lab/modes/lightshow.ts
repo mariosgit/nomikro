@@ -87,20 +87,7 @@ const sparkle: Scene = {
     },
 };
 
-const strobe: Scene = {
-    name: 'Strobe',
-    seconds: 4,
-    start: () => (l, t) => {
-        const step = Math.floor(t * 12);
-        if (step % 2) return; // dark half of the flash
-        const color = hue(step / 2);
-        for (const n of PADS) l.pad(n, color, 3);
-        for (let i = 0; i < STRIP_LEDS; i++) l.strip(i, color, 3);
-        for (const b of BUTTONS) l.button(b, 4);
-    },
-};
-
-export const SCENES: Scene[] = [rainbow, ripple, scanner, sparkle, strobe];
+export const SCENES: Scene[] = [rainbow, ripple, scanner, sparkle];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

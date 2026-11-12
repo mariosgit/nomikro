@@ -118,7 +118,7 @@ export function App() {
         <div className="min-h-screen">
             <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-800 dark:bg-zinc-900/80">
                 <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-3 px-4 py-3">
-                    <a href={toHash({ app: DEFAULT_APP, path: '', params: {} })} className="flex items-baseline gap-2">
+                    <a href={toHash({ app: 'muop', path: '', params: {} })} className="flex items-baseline gap-2">
                         <span className="text-lg font-bold tracking-tight" title="nomikro">
                             noμ
                         </span>
@@ -137,7 +137,7 @@ export function App() {
                                         : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-white'
                                 }`}
                             >
-                                {APPS[name].label}
+                                {name === appName ? (APPS[name].title ?? APPS[name].label) : APPS[name].label}
                             </a>
                         ))}
                     </nav>

@@ -15,7 +15,10 @@ export interface AppProps {
 }
 
 export interface AppDef {
+    /** Short tab name in the header. */
     label: string;
+    /** Long name, shown instead of the label on the selected tab (default: the label). */
+    title?: string;
     description: string;
     Component: ComponentType<AppProps>;
     /**

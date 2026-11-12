@@ -98,6 +98,7 @@ function Lab({ maschine, path, params, navigate, routeKey }: AppProps) {
 
 export const lab: AppDef = {
     label: 'Lab',
+    title: 'Lab - Lights & Hardware Tests',
     description: 'Light show and hardware tests.',
     Component: Lab,
     // curl 'localhost:9000/__hw/run?mode=<mode>&<params>' (mode without app= goes to the lab)

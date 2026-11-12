@@ -5,6 +5,12 @@ via **WebHID** (TypeScript, Vite, React ...).
 
 Port of [Pymikro](#pymikro) to the browser.
 
+The name? Uhh that evolved no-py and mikro... so what...
+
+## Try It !
+
+[goto MüOp](https://mariosgit.github.io/nomikro/) use chome/chromium !
+
 ## Get started
 
 ```
@@ -20,9 +26,7 @@ On Linux, allow access to the device: `sudo cp 50-ni-maschine.rules /etc/udev/ru
 
 `npm run build` builds all pages to `dist/`.
 
-### Try It ! on GitHub Pages
-
-[goto MüOp](https://mariosgit.github.io/nomikro/) use chome/chromium !
+### GitHub Pages
 
 Every push to `main` builds the site and deploys it to `https://<user>.github.io/<repo>/`
 (see [`.github/workflows/pages.yml`](.github/workflows/pages.yml)). One-time setup in the GitHub repo:
@@ -111,3 +115,4 @@ Used as sound engine. Cool stuff.
 ### claude
 
 The AI agent helped a bit to rewrite all of the python code and everything else.
+Supervised by humans :-P

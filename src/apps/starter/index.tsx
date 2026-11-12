@@ -52,6 +52,7 @@ function Starter({ maschine }: AppProps) {
 
 export const starter: AppDef = {
     label: 'Starter',
+    title: 'Starter - New App Template',
     description: 'Template for a new idea: pads light up while pressed.',
     Component: Starter,
 };

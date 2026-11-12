@@ -99,11 +99,11 @@ Single shot (creates `shot001.jpg`; skips 15 frames so exposure settles):
 ffmpeg -f v4l2 -i /dev/video0 -vf "select=gte(n\,15)" -frames:v 1 shot%03d.jpg
 ```
 
-Time series as one contact sheet: one frame every 4 s over 36 s (= one light show cycle), tiled 3×3:
+Time series as one contact sheet: one frame every 4 s over 32 s (= one light show cycle, 4 scenes × 8 s), tiled 4×2:
 
 ```
-ffmpeg -f v4l2 -i /dev/video0 -vf "fps=1/4,scale=480:-1" -frames:v 9 seq%02d.jpg
-ffmpeg -i seq%02d.jpg -vf "tile=3x3" -frames:v 1 contact.jpg
+ffmpeg -f v4l2 -i /dev/video0 -vf "fps=1/4,scale=480:-1" -frames:v 8 seq%02d.jpg
+ffmpeg -i seq%02d.jpg -vf "tile=4x2" -frames:v 1 contact.jpg
 ```
 
 - Put shots in the scratchpad, not the repo.
