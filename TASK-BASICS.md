@@ -24,20 +24,23 @@ The review history (bugs found + fixed, test rounds) is in git history of this f
 - [ ] **Unit tests (vitest).** Decoders (`pads.ts`, `buttons.ts`) and the LED byte mapping (`lights.ts`) are pure functions.
   Use real reports from `.devlog/hw.jsonl` as fixtures: multi-pad report, encoder wrap, strip, all buttons, LED bytes per color/level.
   Right now a regression only shows up on the device.
-- [ ] **Unplug / replug test** (≈ 1 min, needs a human). The code handles it (App `connect`/`disconnect`, mode aborted,
+- [/] **Unplug / replug test** (≈ 1 min, needs a human). The code handles it (App `connect`/`disconnect`, mode aborted,
   new driver instance), but no one has tried it.
 - [ ] **Long-run test.** All runs so far lasted minutes. A hanging `sendReport` would freeze the lights, since the queue waits forever.
   Soak 30–60 min (light show, `bench` before/after, check the log for errors). Consider a write timeout in the queue.
 
 ## 2. Input events (needed for the sequencer)
 
-- [ ] Pick the report by `reportId` (0x01 buttons, 0x02 pads) instead of by length.
-- [ ] **Edges, not snapshots:** the button callback fires with the full state (every 25 ms while the strip is touched).
+- [x] Pick the report by `reportId` (0x01 buttons, 0x02 pads) instead of by length.
+- [x] **Edges, not snapshots:** the button callback fires with the full state (every 25 ms while the strip is touched).
   Diff the button bits → `buttondown` / `buttonup`, plus `encoder` (delta) and `strip` events. One emitter for everything,
   with timestamps (`event.timeStamp`, or the device timestamp bytes 7–8).
-- [ ] **Pad sensitivity:** the device's own press event needs firm pressure (presses seen at 392..3348 of 4095, median 1262).
+- [x] **Pad sensitivity:** the device's own press event needs firm pressure (presses seen at 392..3348 of 4095, median 1262).
   Light touches only arrive as pressure updates. Generate press/release from the pressure stream with an adjustable threshold
   + hysteresis, and derive velocity from the rise. Keep the device event as a fallback.
+  → Done in `src/maschine/input.ts` (`m.input`: events + held state + `buttonUp.chorded` for modifiers). Velocity = peak
+  pressure in an 8 ms window after the threshold crossing (the device press arrives ≈4 ms after the first sample). Checked by hand with the defaults
+  (on 300, off 120, full 2500, window 8 ms); retune in lab mode `events` (params on/off/full/window).
 
 ## 3. Lights layers
 

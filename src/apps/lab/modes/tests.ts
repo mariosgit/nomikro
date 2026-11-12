@@ -1,6 +1,6 @@
 // Hardware test modes: for checking the device on camera / with the dev log (see CLAUDE.md).
 import { COLORS, LED_BUTTONS, STRIP_LEDS, STRIP_MAX, type Color, type LedButton, type MaschineMikroMk3 } from '../../../maschine';
-import { toHex } from '../../../dev/devlog';
+import { devlog, toHex } from '../../../dev/devlog';
 import { untilAborted, type Mode, type ModeContext } from './types';
 
 /** Shows a static test frame and keeps it (incl. screen text) until aborted. */
@@ -159,6 +159,106 @@ export const TEST_MODES = {
                 await untilAborted(signal);
             } finally {
                 await stop();
+            }
+        },
+    },
+
+    events: {
+        label: 'Test: input events',
+        help:
+            'Edges + held state (m.input). Pads light while held: green soft → yellow → red hard (velocity). Held buttons light up, ' +
+            'the pad color follows the pressure while held, the strip follows the fingers (2nd finger magenta), the display lists what is held. Button release shows tap / chord. ' +
+            'Pad pressure stream goes to .devlog/hw.jsonl (kind "pressure"). Params: on, off, full (pad sensitivity, 0..4095), window (velocity window, ms).',
+        async run(m, signal, ctx) {
+            const s = m.input.sensitivity;
+            const defaults = { ...s };
+            for (const k of ['on', 'off', 'full', 'window'] as const) if (ctx.params[k]) s[k] = Number(ctx.params[k]);
+            ctx.log(`sensitivity on=${s.on} off=${s.off} full=${s.full} window=${s.window} ms`);
+
+            const ledButton = (b: string): b is LedButton => (LED_BUTTONS as readonly string[]).includes(b);
+            const velocityColor = (v: number): Color => (v < 0.33 ? 'green' : v < 0.66 ? 'yellow' : 'red');
+            const stripLed = (pos: number) => Math.min(STRIP_LEDS - 1, Math.floor(((pos - 1) / STRIP_MAX) * STRIP_LEDS));
+            const loggedPressure: number[] = [];
+            let encoder = 0;
+            let screenTimer = 0;
+            const showHeld = () => {
+                // throttled: a screen frame costs ~80 ms on the wire
+                clearTimeout(screenTimer);
+                screenTimer = window.setTimeout(() => {
+                    const buttons = m.input.heldButtons.filter((b) => b !== 'enc-touched');
+                    m.screen.set(`${buttons.join(' ') || '-'}\npads ${m.input.heldPads.map((p) => p + 1).join(' ') || '-'}  enc ${encoder}`);
+                }, 50);
+            };
+
+            m.screen.blankAfter = 0;
+            m.lights.clear();
+            await m.lights.flush();
+            await m.screen.set('Input events');
+
+            // Raw pressure stream, dev log only (for tuning the thresholds)
+            m.onRawInput = (reportId, bytes) => {
+                if (reportId !== 2) return;
+                const pads = (m.pads.decode(bytes) ?? []).map((e) => `${e.pad_nb}:${e.pressed ? 'P' : e.released ? 'R' : e.touched ? 'T' : '?'}${e.pad_val}`);
+                devlog('pressure', pads.join(' '));
+            };
+
+            const off = m.input.onAny((e) => {
+                const l = m.lights;
+                switch (e.type) {
+                    case 'padDown':
+                        l.pad(e.pad, velocityColor(e.velocity));
+                        loggedPressure[e.pad] = e.pressure;
+                        ctx.log(`pad ${e.pad + 1} ↓ vel ${e.velocity.toFixed(2)} (${e.pressure})`, e);
+                        break;
+                    case 'padUp':
+                        l.pad(e.pad, 'off');
+                        ctx.log(`pad ${e.pad + 1} ↑ ${Math.round(e.duration)} ms`, e);
+                        break;
+                    case 'padPressure': {
+                        // pad color follows the pressure; log only steps of ≥ 150 (the stream comes every ~20 ms)
+                        const level = (e.pressure - s.on) / (s.full - s.on);
+                        l.pad(e.pad, velocityColor(level), level < 0.15 ? 1 : level < 0.5 ? 2 : 3);
+                        if (Math.abs(e.pressure - (loggedPressure[e.pad] ?? 0)) >= 150) {
+                            loggedPressure[e.pad] = e.pressure;
+                            ctx.log(`pad ${e.pad + 1} ~ ${e.pressure}`, e);
+                        }
+                        break;
+                    }
+                    case 'buttonDown':
+                        if (ledButton(e.button)) l.button(e.button, 4);
+                        if (e.button !== 'enc-touched') ctx.log(`${e.button} ↓`, e);
+                        break;
+                    case 'buttonUp':
+                        if (ledButton(e.button)) l.button(e.button, 0);
+                        if (e.button !== 'enc-touched')
+                            ctx.log(`${e.button} ↑ ${Math.round(e.duration)} ms ${e.chorded ? 'chord' : e.duration < 300 ? 'tap' : 'hold'}`, e);
+                        break;
+                    case 'encoder':
+                        encoder += e.delta;
+                        ctx.log(`encoder ${e.delta > 0 ? '+' : ''}${e.delta} → ${encoder}`, e);
+                        break;
+                    case 'strip':
+                        for (let i = 0; i < STRIP_LEDS; i++) l.strip(i, 'off');
+                        if (e.position) l.strip(stripLed(e.position), 'cyan');
+                        if (e.position2) l.strip(stripLed(e.position2), 'magenta');
+                        ctx.log(e.position ? `strip ${e.position}${e.position2 ? ` + ${e.position2}` : ''}` : 'strip released', e);
+                        break;
+                }
+                l.flush();
+                showHeld();
+            });
+
+            try {
+                await untilAborted(signal);
+            } finally {
+                off();
+                clearTimeout(screenTimer);
+                Object.assign(s, defaults);
+                m.onRawInput = null;
+                m.screen.blankAfter = 3000;
+                m.lights.clear();
+                await m.lights.flush();
+                await m.screen.clear();
             }
         },
     },

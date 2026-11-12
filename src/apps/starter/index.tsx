@@ -14,17 +14,15 @@ function Starter({ maschine }: AppProps) {
     useDeviceTask(
         maschine,
         async (m, signal) => {
-            const down = new Set<number>();
             m.screen.set('Starter\npress pads');
-            m.setPadCallback((pad) => {
-                if (pad.pressed) down.add(pad.pad_nb);
-                else if (pad.released) down.delete(pad.pad_nb);
-                else return;
-                m.lights.pad(pad.pad_nb, down.has(pad.pad_nb) ? 'orange' : 'off');
+            const off = m.input.onAny((e) => {
+                if (e.type !== 'padDown' && e.type !== 'padUp') return;
+                m.lights.pad(e.pad, e.type === 'padDown' ? 'orange' : 'off');
                 m.lights.flush();
-                setHeld(new Set(down));
+                setHeld(new Set(m.input.heldPads));
             });
             await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+            off();
             setHeld(new Set());
         },
         [],

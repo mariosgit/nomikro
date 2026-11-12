@@ -52,6 +52,38 @@ Identical frames are skipped, and only the newest pending frame is kept.
 
 ## Input
 
+Events with edges and held state (`m.input`, [`input.ts`](input.ts)):
+
+```ts
+const off = m.input.onAny((e) => {           // or m.input.on('padDown', (e) => …)
+  switch (e.type) {
+    case 'padDown':     e.pad; e.velocity /* 0..1 */; e.pressure /* 0..4095 */; break;
+    case 'padPressure': e.pad; e.pressure; break;          // aftertouch while held
+    case 'padUp':       e.pad; e.duration /* ms */; break;
+    case 'buttonDown':  e.button; break;                   // BUTTONS name, incl. 'enc-push', 'enc-touched'
+    case 'buttonUp':    e.button; e.duration; e.chorded; break;
+    case 'encoder':     e.delta /* ±steps */; e.position /* 0..15 */; break;
+    case 'strip':       e.position /* 1..200, 0 = released */; e.position2; break;
+  }
+});
+off();                                       // unsubscribe
+
+m.input.isHeld('shift');                     // modifiers: hold pattern + pad → m.input.isHeld('pattern') in padDown
+m.input.heldButtons; m.input.heldPads; m.input.padPressure(3); m.input.strip;
+m.input.sensitivity = { on: 300, off: 120, full: 2500, window: 8 };  // press, release, velocity 1 (0..4095), velocity window ms
+```
+
+- Every event has `time` (`performance.now()` timebase, from the HID report's `timeStamp`).
+- `buttonUp.chorded`: something else went down while the button was held (pad, button, encoder turn, strip touch),
+  so it was used as a modifier. A tap = short and not chorded. `enc-touched` (touching the encoder) never chords.
+- Pads go down at pressure `on` (light touches count) or on the device's own press event (firm), and up below `off`
+  or on the device's release. After a device release, threshold presses wait until the pressure was seen below `off`
+  (no double hits). Velocity = peak pressure within `window` ms (default 8) after the crossing, `on` → 0, `full` → 1:
+  a hit rises over a few ms (first sample ≈400, the device press ≈4 ms later ≈1000+). padDown is emitted when the device
+  press arrives or the window ends, with the time of the crossing. Thresholds still to be tuned by hand.
+
+Raw callbacks (the decoded reports, still available):
+
 ```ts
 m.setPadCallback((pad) => {
   // pad.pad_nb 0..15, pad.pad_val pressure 0..4095, pad.pressed / pad.released / pad.touched (pressure update)
@@ -65,9 +97,10 @@ m.setButtonCallback((b) => {
 ```
 
 - The button callback fires on every button report: button changes, encoder turns, and strip touches (every 25 ms while touched).
-  It carries the full state, so diff it yourself for press/release edges.
+  It carries the full state.
 - The device's own `pressed` event needs fairly firm pressure. Light touches only show up as `touched` pressure updates.
 - Several pads changing at once arrive in one report. The callback fires once per pad.
+- Reports are dispatched by report id: 0x01 buttons, 0x02 pads.
 
 ## Timing (measured)
 

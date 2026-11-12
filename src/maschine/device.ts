@@ -2,7 +2,12 @@ import { Buttons, type ButtonState } from './buttons';
 import { Pads, type PadEvent } from './pads';
 import { Lights } from './lights';
 import { Screen } from './screen';
+import { Input } from './input';
 import { BUTTONS, PAD_ORDER } from './hardware';
+
+/** Input report ids. */
+const REPORT_BUTTONS = 0x01;
+const REPORT_PADS = 0x02;
 
 /** Output priority: lights jump ahead of queued screen reports. */
 export const Priority = { Lights: 0, Screen: 1 } as const;
@@ -22,6 +27,8 @@ export class MaschineMikroMk3 {
     public pads: Pads;
     public lights: Lights;
     public screen: Screen;
+    /** Input events (padDown/Up, buttonDown/Up, encoder, strip) and held state. See input.ts. */
+    public input = new Input();
 
     private padsCallback: ((pad: PadEvent) => void) | null = null;
     private buttonsCallback: ((state: ButtonState) => void) | null = null;
@@ -51,19 +58,24 @@ export class MaschineMikroMk3 {
     public onRawInput: ((reportId: number, bytes: Uint8Array) => void) | null = null;
 
     private handleInputReport(event: HIDInputReportEvent): void {
-        this.injectInput(event.reportId, new Uint8Array(event.data.buffer, event.data.byteOffset, event.data.byteLength));
+        const bytes = new Uint8Array(event.data.buffer, event.data.byteOffset, event.data.byteLength);
+        this.injectInput(event.reportId, bytes, event.timeStamp);
     }
 
     /** Processes one input report as if it came from the device (also used to replay recorded input). */
-    injectInput(reportId: number, bytes: Uint8Array): void {
+    injectInput(reportId: number, bytes: Uint8Array, time = performance.now()): void {
         this.onRawInput?.(reportId, bytes);
 
-        const btn = this.buttons.decode(bytes); // 13 bytes
-        if (btn) this.buttonsCallback?.(btn);
-
-        const pads = this.pads.decode(bytes); // 63 bytes, one event per changed pad
-        for (const pad of pads ?? []) {
-            this.padsCallback?.(pad);
+        if (reportId === REPORT_BUTTONS) {
+            const btn = this.buttons.decode(bytes); // 13 bytes
+            if (!btn) return;
+            this.buttonsCallback?.(btn);
+            this.input.handleButtons(btn, time);
+        } else if (reportId === REPORT_PADS) {
+            const pads = this.pads.decode(bytes); // 63 bytes, one event per changed pad
+            if (!pads) return;
+            for (const pad of pads) this.padsCallback?.(pad);
+            this.input.handlePads(pads, time);
         }
     }
 
