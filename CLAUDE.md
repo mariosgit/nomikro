@@ -27,6 +27,9 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
 - `src/apps/` **one folder per idea / app version**, registered in `src/apps/index.ts`:
   - `lab/` light show + hardware test modes (`modes/`: `index.ts` registry, `types.ts` contract, `lightshow.ts`, `tests.ts`)
   - `starter/` template for a new app (copy it)
+- `src/engine/` framework-free music engine: `clock.ts` (lookahead scheduler, worker tick, timebase performance.now() ms,
+  `onStep` → `{index, time, duration}`, `at(time, fn)` for lights), `audio.ts` (shared AudioContext, `toAudioTime()`,
+  unlocked on the first click on the page: pad presses don't count as a user gesture)
 - `src/dev/devlog.ts` dev-only logging to the dev server
 - `examples/minimal/` framework-free example page (`/examples/minimal/`); new pages go into `build.rollupOptions.input`
 - `vite-plugins/hw-bridge.ts` dev server bridge (below)
@@ -55,7 +58,7 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
   `mode=replay&from=HH:MM:SS&to=HH:MM:SS[&speed=4]` re-plays recorded input with original timing through the real
   code path (`injectInput`), so input bugs can be reproduced without hands.
 - `mode=bench` measures write timing, `mode=stress` checks for lost lights reports (should end all green).
-- Modes: `show`, `demo`, `pad-levels`, `strip`, `buttons`, `input`, `events` (m.input edges/held state, `on`/`off`/`full` params), `layers` (light layers + held pads), `replay`, `bench`, `stress`, `off`.
+- Modes: `show`, `demo`, `pad-levels`, `strip`, `buttons`, `input`, `events` (m.input edges/held state, `on`/`off`/`full` params), `layers` (light layers + held pads), `clock` (metronome + playhead, timing stats per bar, `bpm`/`swing`), `replay`, `bench`, `stress`, `off`.
 
 1. The dev server is usually already running (`npm start` → http://localhost:9000, Chrome/Chromium for WebHID).
    Check before starting another one: `ss -ltnp | grep 9000`.

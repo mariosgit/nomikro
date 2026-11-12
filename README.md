@@ -34,6 +34,7 @@ src/
   apps/            one folder per idea / app version, registered in apps/index.ts
     lab/           light show + hardware test modes
     starter/       template for a new app
+  engine/          music engine, framework-free: clock (lookahead scheduler), audio context / timing
   dev/             dev-only helpers (log to the dev server)
 examples/
   minimal/         ~50 lines: connect, pads/buttons/strip/encoder → lights + screen

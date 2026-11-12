@@ -53,9 +53,12 @@ composed into the report on flush (the topmost non-zero byte wins).
 
 ## 4. Clock
 
-The light show runs on `setTimeout`: fine for visuals, jittery for music, and throttled to ~1 Hz in background tabs.
-Schedule against `AudioContext.currentTime` (lookahead scheduler or an AudioWorklet clock), and let the lights follow on the next flush.
-Same clock for MIDI out later (Web MIDI timestamps).
+- [x] Done: `src/engine/clock.ts`, a lookahead scheduler (100 ms ahead, 25 ms tick in a worker: hidden tabs don't throttle it).
+  Timebase `performance.now()` ms: runs without a user gesture, Web MIDI uses it natively; audio converts per event with
+  `toAudioTime()` (`src/engine/audio.ts`, via `getOutputTimestamp()`, so the sound is heard at the step time).
+  BPM / swing (50..75 %, MPC-style) changeable while running. Lights via `clock.at(time, fn)`.
+  Measured (lab mode `clock`, 120 and 200 BPM): steps handed out ≥ 83 ms ahead, lights fire 1 ms late on average, < 2 ms max.
+- [x] Checked by hand: metronome by ear, encoder BPM / strip swing live, tab in the background (no gaps between bars in the log).
 
 ## 5. Screen
 

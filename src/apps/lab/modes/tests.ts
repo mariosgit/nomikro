@@ -2,6 +2,8 @@
 import { COLORS, LED_BUTTONS, STRIP_LEDS, STRIP_MAX, type Color, type LedButton, type MaschineMikroMk3 } from '../../../maschine';
 import { devlog, toHex } from '../../../dev/devlog';
 import { untilAborted, type Mode, type ModeContext } from './types';
+import { Clock } from '../../../engine/clock';
+import { audioContext, audioRunning, toAudioTime } from '../../../engine/audio';
 
 /** Shows a static test frame and keeps it (incl. screen text) until aborted. */
 async function holdFrame(m: MaschineMikroMk3, signal: AbortSignal, screenText: string, draw: () => void): Promise<void> {
@@ -299,6 +301,84 @@ export const TEST_MODES = {
                 l.removeLayer();
                 l.clear();
                 await l.flush();
+            }
+        },
+    },
+
+    clock: {
+        label: 'Test: clock',
+        help:
+            'Sequencer clock (src/engine/clock.ts): playhead over the 16 pads, metronome (click the page once to enable audio). ' +
+            'Encoder = BPM, touch strip = swing 50..75. Logs per bar: scheduling lead (> 0 = on time) and how late the lights were. ' +
+            'Params: bpm, swing.',
+        async run(m, signal, ctx) {
+            const clock = new Clock({ bpm: Number(ctx.params.bpm) || 120, swing: Number(ctx.params.swing) || 50 });
+            const l = m.lights;
+            const head = l.layer('playhead');
+            const audio = audioContext();
+            let minLead = Infinity;
+            const late: number[] = [];
+
+            const click = (time: number, accent: boolean, beat: boolean) => {
+                if (!audioRunning()) return;
+                const t = toAudioTime(time);
+                const osc = audio.createOscillator();
+                const gain = audio.createGain();
+                osc.frequency.value = accent ? 1760 : beat ? 880 : 4000;
+                gain.gain.setValueAtTime(accent || beat ? 0.3 : 0.05, t);
+                gain.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+                osc.connect(gain).connect(audio.destination);
+                osc.start(t);
+                osc.stop(t + 0.05);
+            };
+
+            let screenTimer = 0;
+            const showTempo = () => {
+                clearTimeout(screenTimer);
+                screenTimer = window.setTimeout(() => m.screen.set(`${clock.bpm} BPM\nswing ${clock.swing}%`), 60);
+            };
+
+            clock.onStep((step) => {
+                const pos = step.index % 16;
+                minLead = Math.min(minLead, step.time - performance.now());
+                click(step.time, pos === 0, pos % 4 === 0);
+                clock.at(step.time, () => {
+                    late.push(performance.now() - step.time);
+                    head.clear();
+                    head.pad(pos, pos % 4 === 0 ? 'white' : 'cyan');
+                    l.button('play', pos % 4 === 0 ? 4 : 1);
+                    l.flush();
+                    if (pos === 15) {
+                        const avg = late.reduce((a, b) => a + b, 0) / late.length;
+                        ctx.log(
+                            `bar ${Math.floor(step.index / 16) + 1}: ${clock.bpm} BPM swing ${clock.swing}%, lead min ${minLead.toFixed(0)} ms, ` +
+                                `lights late avg ${avg.toFixed(1)} max ${Math.max(...late).toFixed(1)} ms${audioRunning() ? '' : ' (audio off: click the page)'}`,
+                        );
+                        minLead = Infinity;
+                        late.length = 0;
+                    }
+                });
+            });
+
+            const off = m.input.onAny((e) => {
+                if (e.type === 'encoder') clock.bpm = Math.min(240, Math.max(40, clock.bpm + e.delta));
+                else if (e.type === 'strip' && e.position) clock.swing = Math.round(50 + (25 * (e.position - 1)) / (STRIP_MAX - 1));
+                else return;
+                showTempo();
+            });
+
+            m.screen.blankAfter = 0;
+            showTempo();
+            l.clear();
+            clock.start();
+            try {
+                await untilAborted(signal);
+            } finally {
+                clock.stop();
+                off();
+                clearTimeout(screenTimer);
+                m.screen.blankAfter = 3000;
+                await m.screen.clear();
             }
         },
     },
