@@ -1,13 +1,13 @@
 # Nomikro
 
-Port of [Pymikro](#pymikro) to the browser: control a Native Instruments **Maschine Mikro MK3** from a web app
-via **WebHID** (TypeScript, Vite, React for the demo app).
+Port of [Pymikro](#pymikro) to the browser: control a **Maschine Mikro MK3** from a web app
+via **WebHID** (TypeScript, Vite, React ...).
 
 ## Get started
 
 ```
 npm i
-npm start
+npm run dev
 ```
 
 Open `localhost:9000` in Chrome/Chromium (WebHID; only works on localhost or behind https).
@@ -30,7 +30,6 @@ src/
 examples/
   minimal/         ~50 lines: connect, pads/buttons/strip/encoder → lights + screen
 vite-plugins/      dev server helpers (full reload on change, hw-bridge for testing)
-src-py-old/        the original Python implementation, reference only
 ```
 
 ## Build your own
@@ -50,102 +49,6 @@ Only one page should drive the device at a time (two tabs both write to it).
 * Sequencer!
 
 ---
-
-<a id="pymikro"></a>
-
-# Pymikro
-
-Python module to control the Maschine Mikro MK3. It allows you to use this
-maschine not only to create music, but also to control a home automation or a
-robot or any other creative stuff.
-
-It uses directly the USB HID protocol, as a result there is no dependency on a
-product specific driver and it can run on any operating system. Furthermore,
-this gives you access to the full capabilities of this hardware which makes it
-even more fun to use.
-
-## Usage
-
-```python
-import pymikro
-
-maschine = pymikro.MaschineMikroMk3()
-
-# control LEDs
-lState = {
-    'button': {
-        'stop': {'val': 1}
-    },
-    'strip': {
-        1: {'val': 3, 'color': 'blue'}
-    },
-    'pad': {
-        1: {'val': 3, 'color': 'purple'}
-    }
-}
-maschine.lights.set_all(lState)
-
-maschine.lights.set('pad', 6, 3, 'orange')
-maschine.lights.set('strip', 5, 3, 'green')
-maschine.lights.set('button', 'notes', 4)
-maschine.lights.update()
-
-# control screen
-maschine.screen.set("Hello World!\nIt's working")
-
-# get button and pad updates
-while True:
-    cmd = maschine.read_cmd()
-    if cmd:
-        if cmd['cmd'] == 'pad':
-            print('Pad number {} pressed: {}'.format(cmd['pad_nb'], cmd['pad_val']))
-        if cmd['cmd'] == 'btn':
-            print('Buttons pressed: {}'.format(cmd['btn_pressed']))
-```
-
-## Setup
-
-### Linux
-
-Install the hid driver
-
-```bash
-sudo apt-get install libhidapi-hidraw0
-```
-
-Install the package
-
-```bash
-pip3 install pymikro
-```
-
-Set permissions for the device
-
-```bash
-cd /tmp
-wget https://raw.githubusercontent.com/flokapi/pymikro/main/50-ni-maschine.rules
-sudo cp 50-ni-maschine.rules /etc/udev/rules.d/
-```
-
-Plug or re-plug the maschine mikro USB cable.
-
-### Windows
-
-Install the hid driver:
-
-1. Donwload the latest version of `hidapi-win.zip` from
-   <https://github.com/libusb/hidapi/releases>
-
-2. Extract the zip file and copy the `hidapi.dll` corresponding to your
-   architecture to `C:\Users\<Username>\AppData\Local\Programs\Python`
-
-Install the package
-
-```bash
-pip3 install pymikro
-```
-
-Plug or re-plug the maschine mikro USB cable.
 
 ## About
 
@@ -178,120 +81,14 @@ Screen:
 
 - set text with adjustable size, on 1 or 2 lines
 
-### Supported operating systems
+### Implementation
 
-Tested on Linux & Windows
+* src/maschine holds the HID protocol basics. 
 
-Should also work on OSX by installing the hid api. See
-<https://pypi.org/project/hid/>
+## Credits
 
-### API
+This project started as a fork of [pymikro](https://github.com/flokapi/pymikro) by [flokapi](https://github.com/flokapi),
+a Python library for the Maschine Mikro MK3. The HID protocol (report layouts for lights, screen, pads and buttons)
+comes from their work. Thank you!
 
-#### Connection
-
-```python
-import pymikro
-
-maschine = pymikro.MaschineMikroMk3()
-maschine.hid.show_info()
-```
-
-#### Inputs
-
-LEDs:
-
-- The state of the LEDs for the pads/touch strip/buttons is defined in a single
-  data-structure which can be accessed and modified using the `lights.get_all`
-  and `lights.set_all` methods. The LEDs can also be set individually using
-  `lights.set`.
-
-- To apply the changes, `lights.update` must be called. Using a separate command
-  allows to apply all the changes in a single write procedure (about 15ms) and
-  increases the reactivity.
-
-- Example:
-
-  ```python
-  maschine.lights.set_all({})                         # set empty dictionary to disable all LEDs
-  maschine.lights.update()
-
-  time.sleep(1)
-
-  lState = {
-      'button': {
-          'stop': {'val': 1}                     # Button brighness value must be between 0
-      },
-      'strip': {
-          1: {'val': 4, 'color': 'blue'}         # Touch Strip LED brightness value must be between 0 and 3
-      },
-      'pad': {
-          1: {'val': 3, 'color': 'purple'}       # Pad brightness value must be between 0 and 3
-      }
-  }
-  maschine.lights.set_all(lState)
-
-  maschine.lights.set('pad', 6, 3, 'orange')       # pad nb 6, brightness 3.
-  maschine.lights.set('strip', 5, 3, 'green')      # strip led nb 5, brightness 3.
-  maschine.lights.set('button', 'notes', 4)        # button 'notes', brightness 4.
-  maschine.lights.update()
-  ```
-
-Screen
-
-- Example
-
-  ```python
-  maschine.screen.set("Hello", 24)                       # Font size set to 24
-
-  maschine.screen.set(f"Hello World!\nIt's working")     # Printing text on both lines with '\n'.
-                                                        # Default font size is 14
-  ```
-
-#### Outputs
-
-Output commands can be read in a non-blocking way using the `read_cmd` method,
-which returns:
-
-- `None` if no new command is available
-- A dictionary which content differs depending on the `cmd` key value (`btn` or
-  `pad`)
-- Example: `cmd = maschine.read_cmd()`
-
-Pads
-
-- The pad command is only sent when the state of a pad is being changed
-  (pressed/touched/released). The pad command is sent for a single pad at the
-  time.
-
-- Example
-
-  ```python
-  {
-      'cmd': 'pad',
-      'pad_nb': 5,
-      'pad_val': 1360,                                 # between 0 and 4095
-      'touched': True,                                 # finger in contact with the pad
-      'pressed': False,                                # finger just pressed the pad (not 100% reliable)
-      'released': False                                # finger just released the pad (not 100% reliable)
-  }
-  ```
-
-Buttons:
-
-- The button command is only sent when the state of the buttons/touch
-  strip/encoder changed (including button release). The command contains the
-  full state of the button group.
-
-- Example
-
-  ```python
-  {
-      'cmd': 'btn',
-      'btn_pressed': ['group', 'pattern', 'enter'],   # currently pressed buttons
-      'encoder_pos': 10,                              # byte, cyclic value between 0 and 15
-      'encoder_move': 1,                              # encoded moved to the right (+1) or left (-1)
-      'encoder_touched': True,                        # finger in contact with the encoder
-      'strip_pos_1': 123,                             # value of the strip if one finger touching
-      'strip_pos_2': 0                                # second value if another finger is on the strip
-  }
-  ```
+Nomikro ports it to TypeScript/WebHID for the browser, verifies the details against the hardware, and adds the web app.

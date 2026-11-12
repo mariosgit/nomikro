@@ -26,7 +26,6 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
 - `src/dev/devlog.ts` dev-only logging to the dev server
 - `examples/minimal/` framework-free example page (`/examples/minimal/`); new pages go into `build.rollupOptions.input`
 - `vite-plugins/hw-bridge.ts` dev server bridge (below)
-- `src-py-old/` the original Python implementation (pymikro), reference only
 
 ## Rules
 
