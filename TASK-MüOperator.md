@@ -24,12 +24,21 @@ Mapping and controls: see the page (cheat sheet) and `src/apps/muop/controller.t
 
 ## v2 ideas (suggested order)
 - [ ] PERFORM + pad: punch-in FX (stutter / retrigger, filter sweeps, glitch), next up
-- [ ] Sound tuning: rework the drum sounds that feel weak (needs listening feedback, `sounds.ts`)
-- [ ] Bass track: second melodic track. KEYBOARD toggles between "lead" and "bass" (pressing it again switches),
-  own sound (mono, low octave), own steps per pattern. Display / page show which one is selected.
-- [ ] Chords track: CHORDS button selects it. Pads = 16 chords (PO-20 style, e.g. diatonic chords of the scale +
-  inversions / sus), steps hold a chord, own pad-like sound.
-- [ ] MUTE / SOLO per drum sound
+- [x] Sound engine per track: `src/engine/instruments/` (basic, Tone.js), page select or SEARCH,
+  stored in the song per track.
+- [x] SEARCH = next sound for the current track (SHIFT = previous), STAR = random variation (temporary, not saved),
+  VOLUME + encoder = track volume (saved in the song), SHIFT + VOLUME = master. Engines take a `random` flag (`chooser()`).
+- [ ] Sound presets: save a sound (engine + settings, e.g. a STAR result you like) under a name, browse them with SEARCH.
+- [ ] Sound tuning: rework the sounds that feel weak (needs listening feedback, `src/engine/instruments/`)
+- [ ] More engines: samples (drum kits as WAV/OGG one-shots), smplr, Faust / AudioWorklet, MIDI out as an "instrument"
+- [x] 16 tracks, SELECT + pad selects (pads show the tracks while held). Track kinds: drums / notes / chords.
+  T1 Drums, T2 Bass (notes, octave -1, Sub lead), T3 Chords (Pad), T4 Lead; PAD MODE / KEYBOARD (bass ↔ lead) / CHORDS
+  are shortcuts. Chords: pads 1–8 diatonic triads, 9–16 seventh chords (A minor). v1 songs migrate (drums → T1, melody → T4).
+- [ ] Fill empty tracks 5–16: choose a kind + sound (e.g. SELECT an empty track, then SEARCH cycles kinds / sounds)
+- [ ] Track names / octave editable (e.g. SHIFT + encoder = octave), more chord voicings (inversions, sus)
+- [ ] Variable note length (notes / chords): today every note lasts 0.85 step. Store a length per step
+  (e.g. hold a step + another step = tie / length, or a gate value per step); live recording keeps how long the pad was held.
+- [ ] MUTE / SOLO + pad: per track (pads show the tracks like SELECT), per drum sound on a drums track
 - [ ] Per-step parameter locks (hold step + encoder for drums: pitch / decay)
 - [ ] Sound parameters per drum / lead (encoder without modifier)
 - [ ] MIDI out per track

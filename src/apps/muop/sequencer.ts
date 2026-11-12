@@ -1,21 +1,20 @@
 // μOp sequencer: plays the song's pattern chain on the clock, records live hits quantized to the nearest step.
 import { Clock } from '../../engine/clock';
 import { toAudioTime } from '../../engine/audio';
-import { DRUMS, STEPS, degreeToMidi, type Song } from './model';
-import type { Synth } from './sounds';
+import { DRUMS, STEPS, chordNotes, degreeToMidi, type Song } from './model';
+import type { Sounds } from './sounds';
 
 export interface PlayedStep {
     /** performance.now() ms */
     time: number;
     pattern: number;
     step: number;
-    /** Drum sounds triggered on this step. */
-    drums: number[];
-    /** Melody degree played, null = rest. */
-    note: number | null;
+    /** Per track: the pads that played (drum sounds / note degrees / chord numbers), for flashing them. */
+    pads: number[][];
 }
 
-type Target = { track: 'drums'; sound: number } | { track: 'melody' };
+/** Where a live hit goes: a drum sound of a drums track, or the note row of a notes / chords track. */
+export type Target = { track: number; sound?: number };
 
 export class Sequencer {
     readonly clock: Clock;
@@ -33,7 +32,7 @@ export class Sequencer {
 
     constructor(
         private song: Song,
-        private synth: Synth,
+        private sounds: Sounds,
     ) {
         this.clock = new Clock({ bpm: song.bpm, swing: song.swing });
         this.clock.onStep(({ index, time, duration }) => this.play(index, time, duration));
@@ -101,9 +100,9 @@ export class Sequencer {
             if (step === 0) pattern = this.peekNextPattern();
             this.skip.add(this.key(pattern, step, target));
         }
-        const p = this.song.patterns[pattern];
-        if (target.track === 'drums') p.drums[target.sound][step] = value;
-        else p.melody[step] = value;
+        const t = this.song.patterns[pattern].tracks[target.track];
+        if (target.sound !== undefined) t.drums[target.sound][step] = value;
+        else t.notes[step] = value;
         return { pattern, step };
     }
 
@@ -115,21 +114,30 @@ export class Sequencer {
         const p = this.song.patterns[pattern];
         const t = toAudioTime(time);
 
-        const drums: number[] = [];
-        for (let sound = 0; sound < DRUMS; sound++) {
-            const v = p.drums[sound][step];
-            if (v > 0 && !this.skip.delete(this.key(pattern, step, { track: 'drums', sound }))) {
-                this.synth.drum(sound, t, v);
-                drums.push(sound);
+        const length = (duration * 0.85) / 1000;
+        const pads = this.song.tracks.map((track, i): number[] => {
+            const steps = p.tracks[i];
+            if (track.kind === 'drums') {
+                const hit: number[] = [];
+                for (let sound = 0; sound < DRUMS; sound++) {
+                    const v = steps.drums[sound][step];
+                    if (v > 0 && !this.skip.delete(this.key(pattern, step, { track: i, sound }))) {
+                        this.sounds.drum(i, sound, t, v);
+                        hit.push(sound);
+                    }
+                }
+                return hit;
             }
-        }
-        let note = p.melody[step];
-        if (note !== null && this.skip.delete(this.key(pattern, step, { track: 'melody' }))) note = null;
-        if (note !== null) this.synth.note(degreeToMidi(note), t, 0.8, (duration * 0.85) / 1000);
+            const n = steps.notes[step];
+            if (track.kind === null || n === null || this.skip.delete(this.key(pattern, step, { track: i }))) return [];
+            const midis = track.kind === 'chords' ? chordNotes(n, track.octave) : [degreeToMidi(n, track.octave)];
+            for (const midi of midis) this.sounds.note(i, midi, t, 0.8, length);
+            return [n];
+        });
 
         this.recent.push({ time, pattern, step, duration });
         if (this.recent.length > 8) this.recent.shift();
-        for (const l of this.listeners) l({ time, pattern, step, drums, note });
+        for (const l of this.listeners) l({ time, pattern, step, pads });
     }
 
     private advanceChain(): void {
@@ -151,6 +159,6 @@ export class Sequencer {
     }
 
     private key(pattern: number, step: number, target: Target): string {
-        return `${pattern}:${step}:${target.track === 'drums' ? target.sound : 'm'}`;
+        return `${pattern}:${step}:${target.track}:${target.sound ?? 'n'}`;
     }
 }

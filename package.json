@@ -21,7 +21,8 @@
     "dependencies": {
         "@types/w3c-web-hid": "^1.0.7",
         "react": "^19.2.6",
-        "react-dom": "^19.2.6"
+        "react-dom": "^19.2.6",
+        "tone": "15.1.22"
     },
     "type": "module"
 }
