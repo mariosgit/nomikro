@@ -19,7 +19,7 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
 
 - `src/maschine/` **the driver** (framework-free, no imports from app/dev, public API in `index.ts`, docs in its README):
   `device.ts` (open, input dispatch, output queue lights-before-screen), `lights.ts` (state = 0x80 report buffer,
-  `pad()`/`strip()`/`button()`/`clear()`/`flush()`), `screen.ts`, `buttons.ts` / `pads.ts` (input decoding + report layouts),
+  `pad()`/`strip()`/`button()`/`clear()`/`flush()`, `layer(name)` adds layers on top), `screen.ts`, `buttons.ts` / `pads.ts` (input decoding + report layouts),
   `hardware.ts` (ids, button/pad order, colors, `Color`/`LedButton` types)
 - `src/shell/` React shell: `App.tsx` (connect, header with app switcher, routing), `route.ts` (`#/<app>/<path>?<params>`),
   `device.ts` (`useDeviceTask()`: runs device tasks one after another across all apps, releases callbacks + lights after),
@@ -55,7 +55,7 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
   `mode=replay&from=HH:MM:SS&to=HH:MM:SS[&speed=4]` re-plays recorded input with original timing through the real
   code path (`injectInput`), so input bugs can be reproduced without hands.
 - `mode=bench` measures write timing, `mode=stress` checks for lost lights reports (should end all green).
-- Modes: `show`, `demo`, `pad-levels`, `strip`, `buttons`, `input`, `events` (m.input edges/held state, `on`/`off`/`full` params), `replay`, `bench`, `stress`, `off`.
+- Modes: `show`, `demo`, `pad-levels`, `strip`, `buttons`, `input`, `events` (m.input edges/held state, `on`/`off`/`full` params), `layers` (light layers + held pads), `replay`, `bench`, `stress`, `off`.
 
 1. The dev server is usually already running (`npm start` → http://localhost:9000, Chrome/Chromium for WebHID).
    Check before starting another one: `ss -ltnp | grep 9000`.

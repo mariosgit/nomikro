@@ -33,6 +33,23 @@ m.lights.clear();                // everything off
 await m.lights.flush();          // send if changed
 ```
 
+### Layers
+
+`m.lights` is the bottom layer. `m.lights.layer(name, z?)` adds a layer on top (created on first use, higher z on top,
+default above the existing ones), with the same setters. On flush, the topmost non-zero byte per LED wins, so `'off'`
+on a layer is transparent: the layers below show through.
+
+```ts
+const grid = m.lights.layer('grid');        // e.g. sequencer steps
+const overlay = m.lights.layer('overlay');  // held pads, playhead
+grid.pad(3, 'green', 2);
+overlay.pad(3, 'white');                    // covers the step
+overlay.pad(3, 'off');                      // step visible again
+m.lights.flush();                           // or grid.flush()
+m.lights.removeLayer('grid');               // removeLayer() = all layers
+```
+
+- `clear()` clears only that layer. A change that's hidden under a higher layer sends nothing.
 - `flush()` is cheap to call often: it only sends when something changed, keeps one report in flight, and always sends the latest state.
   You don't have to `await` it.
 - Colors: `COLORS` / type `Color` (`'red'`, `'orange'`, … `'white'`). Button names: `LED_BUTTONS` / type `LedButton`.

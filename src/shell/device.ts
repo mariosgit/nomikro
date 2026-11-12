@@ -9,13 +9,14 @@ export type DeviceTask = (m: MaschineMikroMk3, signal: AbortSignal) => Promise<v
 
 let running: Promise<void> = Promise.resolve();
 
-/** Hands the device back in a neutral state: no input callbacks / listeners left behind, lights off. */
+/** Hands the device back in a neutral state: no input callbacks / listeners / light layers left behind, lights off. */
 async function release(m: MaschineMikroMk3): Promise<void> {
     m.setPadCallback(() => {});
     m.setButtonCallback(null);
     m.onRawInput = null;
     m.input.removeAllListeners();
     m.screen.blankAfter = 3000;
+    m.lights.removeLayer();
     m.lights.clear();
     await m.lights.flush();
 }

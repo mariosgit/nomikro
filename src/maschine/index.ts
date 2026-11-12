@@ -3,7 +3,7 @@
 export { MaschineMikroMk3, Priority } from './device';
 export type { PadEvent } from './pads';
 export type { ButtonState } from './buttons';
-export type { Lights } from './lights';
+export type { Lights, LightLayer } from './lights';
 export type { Screen } from './screen';
 export type { Input, InputEvent, InputEventType, InputEventOf, PadSensitivity } from './input';
 export {

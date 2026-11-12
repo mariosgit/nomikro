@@ -29,15 +29,13 @@ function colorByte(color: Color, level: number): number {
 }
 
 /**
- * LED state = the report buffer itself. Setters write the byte directly; flush() sends it.
+ * One layer of LED state: an 80-byte buffer in report layout. Setters write the byte directly.
  * Levels are clamped: pads/strip 0..3, buttons 0..4 (0 = off).
  */
-export class Lights {
-    private data = new Uint8Array(REPORT_SIZE);
-    private dirty = true; // first flush always sends, the device may still show LEDs from before
-    private inFlight: Promise<void> | null = null;
+export class LightLayer {
+    protected data = new Uint8Array(REPORT_SIZE);
 
-    constructor(private send: SendReport) {}
+    constructor(private onChange: () => void) {}
 
     pad(n: number, color: Color, level = 3): void {
         this.put(PAD_OFFSET + PAD_SLOT[checkIndex('pad', n, PAD_COUNT)], colorByte(color, level));
@@ -62,46 +60,122 @@ export class Lights {
         this.put(at, byte & 0xFF);
     }
 
-    /** All LEDs off (sent on the next flush). */
+    /** All LEDs of this layer off (sent on the next flush). */
     clear(): void {
         if (this.data.some((b) => b !== 0)) {
             this.data.fill(0);
-            this.dirty = true;
+            this.onChange();
         }
     }
 
-    /**
-     * Sends the current state if it changed. At most one report is in flight: calls during a write
-     * return the running write, which sends once more afterwards so the latest state always goes out.
-     */
-    flush(): Promise<void> {
-        if (this.inFlight) return this.inFlight;
-        if (!this.dirty) return Promise.resolve();
-        this.inFlight = this.pump(); // pump awaits before its finally, so this assignment happens first
-        return this.inFlight;
-    }
-
-    private async pump(): Promise<void> {
-        try {
-            while (this.dirty) {
-                this.dirty = false;
-                try {
-                    // sendReport copies the bytes synchronously (WebHID spec), so the buffer can be reused right away
-                    await this.send(REPORT_ID, this.data);
-                } catch (error) {
-                    this.dirty = true; // not sent, retry on the next flush
-                    throw error;
-                }
-            }
-        } finally {
-            this.inFlight = null;
-        }
+    /** Raw bytes, for composing. */
+    get bytes(): Readonly<Uint8Array> {
+        return this.data;
     }
 
     private put(index: number, byte: number): void {
         if (this.data[index] !== byte) {
             this.data[index] = byte;
+            this.onChange();
+        }
+    }
+}
+
+interface NamedLayer {
+    name: string;
+    z: number;
+    layer: LightLayer;
+}
+
+/**
+ * The device's LEDs. `m.lights` itself is the bottom layer (z 0); `layer(name)` adds layers on top,
+ * e.g. a sequencer grid and an overlay for held pads / playhead, so one doesn't wipe the other.
+ * On flush the layers are composed per LED: the topmost non-zero byte wins ('off' is transparent).
+ */
+export class Lights extends LightLayer {
+    private layers: NamedLayer[] = [];
+    private out = new Uint8Array(REPORT_SIZE);
+    private sent: Uint8Array | null = null; // null: first flush always sends, the device may still show LEDs from before
+    private dirty = true;
+    private inFlight: Promise<void> | null = null;
+
+    constructor(private send: SendReport) {
+        super(() => (this.dirty = true));
+    }
+
+    /**
+     * The layer with this name, created on first use. Higher z is on top; default = above all existing layers.
+     * Draw on it like on `m.lights`, then `m.lights.flush()` (or `layer.flush()`).
+     */
+    layer(name: string, z?: number): LightLayer & { flush(): Promise<void> } {
+        let entry = this.layers.find((l) => l.name === name);
+        if (!entry) {
+            const layer = Object.assign(new LightLayer(() => (this.dirty = true)), { flush: () => this.flush() });
+            entry = { name, z: z ?? Math.max(0, ...this.layers.map((l) => l.z)) + 1, layer };
+            this.layers.push(entry);
+            this.layers.sort((a, b) => a.z - b.z);
+        } else if (z !== undefined && z !== entry.z) {
+            entry.z = z;
+            this.layers.sort((a, b) => a.z - b.z);
             this.dirty = true;
+        }
+        return entry.layer as LightLayer & { flush(): Promise<void> };
+    }
+
+    /** Removes a layer (all layers without a name). Sent on the next flush. */
+    removeLayer(name?: string): void {
+        const before = this.layers.length;
+        this.layers = name === undefined ? [] : this.layers.filter((l) => l.name !== name);
+        if (this.layers.length !== before) this.dirty = true;
+    }
+
+    /** Names of the layers above the base, bottom → top. */
+    get layerNames(): string[] {
+        return this.layers.map((l) => l.name);
+    }
+
+    /**
+     * Composes the layers and sends the result if it changed. At most one report is in flight: calls during a write
+     * return the running write, which sends once more afterwards so the latest state always goes out.
+     */
+    flush(): Promise<void> {
+        if (this.inFlight) return this.inFlight;
+        if (!this.dirty) return Promise.resolve();
+        this.inFlight = this.pump(); // pump yields before its finally, so this assignment happens first
+        return this.inFlight;
+    }
+
+    private compose(): Uint8Array<ArrayBuffer> {
+        this.out.set(this.data);
+        for (const { layer } of this.layers) {
+            const bytes = layer.bytes;
+            for (let i = 0; i < REPORT_SIZE; i++) if (bytes[i] !== 0) this.out[i] = bytes[i];
+        }
+        return this.out;
+    }
+
+    private async pump(): Promise<void> {
+        // Yield first: flush() must store this promise before the finally below clears it
+        // (without a write, e.g. a change hidden under a top layer, the loop wouldn't await at all).
+        await undefined;
+        try {
+            while (this.dirty) {
+                this.dirty = false;
+                const out = this.compose();
+                if (this.sent && out.every((b, i) => b === this.sent![i])) continue; // hidden change, nothing to send
+                try {
+                    // sendReport copies the bytes synchronously (WebHID spec), so the buffer can be reused right away
+                    const write = this.send(REPORT_ID, out);
+                    (this.sent ??= new Uint8Array(REPORT_SIZE)).set(out);
+                    await write;
+                } catch (error) {
+                    this.sent = null; // unknown device state: send again on the next flush
+                    this.dirty = true;
+                    throw error;
+                }
+            }
+        } finally {
+            this.inFlight = null;
         }
     }
 }

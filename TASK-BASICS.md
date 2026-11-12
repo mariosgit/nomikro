@@ -44,6 +44,9 @@ The review history (bugs found + fixed, test rounds) is in git history of this f
 
 ## 3. Lights layers
 
+- [x] Done: `m.lights.layer(name, z?)` in `src/maschine/lights.ts`, composed on flush (topmost non-zero byte wins), only sent
+  if the composed report changed. The shell removes an app's layers on app switch. Lab mode `layers` shows it.
+
 The light show and pad feedback share one state, so `clear()` per frame wipes the feedback.
 Use a few layers (e.g. `background` = sequencer grid, `overlay` = held pads / playhead), each an 80-byte buffer,
 composed into the report on flush (the topmost non-zero byte wins).

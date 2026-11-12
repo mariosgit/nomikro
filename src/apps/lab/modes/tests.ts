@@ -263,6 +263,46 @@ export const TEST_MODES = {
         },
     },
 
+    layers: {
+        label: 'Test: light layers',
+        help:
+            'Base: all pads dim blue. Layer "steps": a few green steps. Layer "playhead": a white column walking left → right ' +
+            '(steps reappear behind it). Top layer "held": pressed pads red, the grid comes back on release. Param: ms (playhead step, default 250).',
+        async run(m, signal, ctx) {
+            const l = m.lights;
+            const steps = l.layer('steps');
+            const playhead = l.layer('playhead');
+            const held = l.layer('held');
+            ctx.log(`layers bottom → top: base, ${l.layerNames.join(', ')}`);
+
+            l.clear();
+            for (let n = 0; n < 16; n++) l.pad(n, 'blue', 1);
+            for (const n of [0, 5, 10, 15, 3, 12]) steps.pad(n, 'green', 2);
+            const off = m.input.onAny((e) => {
+                if (e.type === 'padDown') held.pad(e.pad, 'red');
+                else if (e.type === 'padUp') held.pad(e.pad, 'off');
+                else return;
+                l.flush();
+            });
+            m.screen.set('Light layers');
+
+            const stepMs = Number(ctx.params.ms) || 250;
+            try {
+                for (let col = 0; !signal.aborted; col = (col + 1) % 4) {
+                    playhead.clear();
+                    for (let row = 0; row < 4; row++) playhead.pad(row * 4 + col, 'white', 2);
+                    await l.flush();
+                    await new Promise((r) => setTimeout(r, stepMs));
+                }
+            } finally {
+                off();
+                l.removeLayer();
+                l.clear();
+                await l.flush();
+            }
+        },
+    },
+
     replay: {
         label: 'Test: replay input',
         help: 'Replays recorded input reports (pads + buttons) from .devlog/hw.jsonl (input mode) with original timing through the input monitor. Params: from, to (HH:MM:SS), speed.',
