@@ -1,13 +1,31 @@
 # Maschine-PiMicro
 
+The controller is a "Maschine micro mk3" !["Maschine micro mk3"](./img/4cbf124532hsVhrlgRtDcEbwpTiD9sqS8pmIQKec.webp)
+
+This is normaly bundled with a software pack, i like to make an alternative software which runs as a web app using chrome and the hid api.
+The web app shall not imitate the Maschine App, it should be a easy to use sequencer maybe with some ideas from
+* playfull PO's ["PocketOperator"](https://teenage.engineering/guides/po-20/en) 
+* or the more nerdy performer ["Performer"](https://westlicht.github.io/performer/manual/). (source code ../performer)
+It is not supposed to become a full fledged Music studio.
+
+The sounds should be produced in chrome, i'm sure there is some engine for that...
+Also keep the posibility to output MIDI via the midi api, so sounds can be played on external gear.
+
+
+---
+
 Browser app (Vite + React + TypeScript) that drives a Native Instruments **Maschine Mikro MK3** over **WebHID**.
 The device sits on the desk in front of a webcam (`/dev/video0`), so changes can be checked visually.
 
-- `src/maschine_mikro_mk3.ts` device class (HID open/write, input report decoding)
-- `src/lights.ts` LED state → 0x80 report, `src/screen.ts` 128×32 display, `src/buttons.ts` / `src/pads.ts` input decoding
-- `src/maschine_mikro_mk3.json` vid/pid, button + pad order, color names
-- `src/lightshow.ts` animated scenes (`SCENES`), `runLightShow(maschine, signal)`
-- `src/App.tsx` connects and starts the light show automatically
+- `src/maschine/` **the driver** (framework-free, no imports from app/dev, public API in `index.ts`, docs in its README):
+  `device.ts` (open, input dispatch, output queue lights-before-screen), `lights.ts` (state = 0x80 report buffer,
+  `pad()`/`strip()`/`button()`/`clear()`/`flush()`), `screen.ts`, `buttons.ts` / `pads.ts` (input decoding + report layouts),
+  `hardware.ts` (ids, button/pad order, colors, `Color`/`LedButton` types)
+- `src/app/` React app: `App.tsx` (connect, mode runner), `modes/` (`index.ts` registry, `types.ts` contract,
+  `lightshow.ts`, `tests.ts` hardware tests)
+- `src/dev/devlog.ts` dev-only logging to the dev server
+- `examples/minimal/` framework-free example page (`/examples/minimal/`); new pages go into `build.rollupOptions.input`
+- `vite-plugins/hw-bridge.ts` dev server bridge (below)
 - `src-py-old/` the original Python implementation (pymikro), reference only
 
 ## Rules
@@ -15,7 +33,25 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
 - **Drive the device only through the browser app.** No Node/hidraw/Python shortcuts that write to `/dev/hidraw*`.
   The point is to build and verify the WebHID app itself.
 
+- Use: vite typescript react.
+- App UI: tailwind or daisyUI as needed.
+
+- Do not commit anything, that's a check again feature for the chef.
+
+
 ## Dev loop
+
+**hw-bridge** (`vite-plugins/hw-bridge.ts`, dev server only) connects the terminal and the browser app:
+- Switch the app's mode: `curl 'localhost:9000/__hw/run?mode=<mode>&<params>'`. Modes are in `src/app/modes/`:
+  see the list below.
+- The app logs to `.devlog/hw.jsonl` (`devlog()` in `src/devlog.ts`): `connected`, `mode` (confirms a switch), `event` (test output,
+  raw input hex in the input monitor), `error`. Check here first: `tail .devlog/hw.jsonl`.
+- After a config change the server restarts and the page reloads. Wait for a fresh `connected` line before sending a mode.
+- Inputs (pads/buttons/encoder) need a human. Ask the user, using the `input` mode. The input monitor logs raw hex;
+  `mode=replay&from=HH:MM:SS&to=HH:MM:SS[&speed=4]` re-plays recorded input with original timing through the real
+  code path (`injectInput`), so input bugs can be reproduced without hands.
+- `mode=bench` measures write timing, `mode=stress` checks for lost lights reports (should end all green).
+- Modes: `show`, `demo`, `pad-levels`, `strip`, `buttons`, `input`, `replay`, `bench`, `stress`, `off`.
 
 1. The dev server is usually already running (`npm start` → http://localhost:9000, Chrome/Chromium for WebHID).
    Check before starting another one: `ss -ltnp | grep 9000`.
@@ -52,8 +88,14 @@ ffmpeg -i seq%02d.jpg -vf "tile=3x3" -frames:v 1 contact.jpg
 
 ## Hardware notes (verified on camera)
 
+- Pad input: the device's press event (0x10) needs fairly high pressure (≈400–3300 of 4095 seen). Light touches only come as
+  0x40 'touched' pressure updates. Pressure is 12 bit.
 - Pads: number 0–15, pad 0 = bottom left (printed label "1"), pad 12 = top left. Row-major from the bottom.
-- Touch strip: 25 LEDs (`strip` 0–24; direction assumed left → right, not yet verified).
-- Pad/strip brightness `val` 1–3 (0 = off); byte = 4 × colorIndex + val, so `val` 4 bleeds into the next color.
-- Buttons: brightness 0–4, no color. `enc-push` / `enc-touched` have no LED; their indexes land on pad LEDs, so skip them.
+- Touch strip: 25 LEDs (`strip` 0–24, left → right). Touch position 1–200 left → right, 0 = not touched (`STRIP_MAX`).
+- Pad/strip level 1–3 (0 = off), byte = 4 × colorIndex + level. Raw level 0 is *not* off (dim); byte 0 is off. `Lights` clamps levels.
+- Buttons: brightness 0–4, no color. Raw bytes 0–3 and ≥128 = off, otherwise the low 2 bits count: `01 < 00 < 10 < 11` (hence the table 13, 12, 10, 11). `enc-push` / `enc-touched` have no LED; their indexes land on pad LEDs, so skip them.
+- Output timing (measured): LED report 16 ms, screen frame 2 × ~38 ms, one report on the wire at a time.
+  `MaschineMikroMk3` queues all writes, lights first. Don't redraw the screen on every input event.
+- Lights report 0x80 is **80 bytes** (descriptor). Button report: see `src/maschine/buttons.ts` (byte 6 encoder, 9 strip).
 - Display shows the current scene name (`maschine.screen.set`), auto-blanks after 3 s.
+- Display is an aged OLED (ssd1303 or so) it shall blank after some seconds to save it...

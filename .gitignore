@@ -170,3 +170,6 @@ dist/
 shot*.jpg
 seq*.jpg
 contact*.jpg
+
+# hw-bridge dev log
+.devlog/

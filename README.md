@@ -1,24 +1,57 @@
 # Nomikro
 
-port of ```Pymikro``` using 
-WebHID / Node / typescript / react 
+Port of [Pymikro](#pymikro) to the browser: control a Native Instruments **Maschine Mikro MK3** from a web app
+via **WebHID** (TypeScript, Vite, React for the demo app).
 
-Get started
+## Get started
+
 ```
 npm i
 npm start
 ```
 
-Open ```localhost:9000``` or whatever in chrome / chromium or whatever browser with WebHID support. (Only works on localhost or behind a https proxy !)
+Open `localhost:9000` in Chrome/Chromium (WebHID; only works on localhost or behind https).
+On Linux, allow access to the device: `sudo cp 50-ni-maschine.rules /etc/udev/rules.d/` and re-plug.
 
+- `localhost:9000`: the app (light show + hardware test modes)
+- `localhost:9000/examples/minimal/`: a minimal example without a framework
+
+`npm run build` builds all pages to `dist/`.
+
+## Structure
+
+```
+src/
+  maschine/        the driver: WebHID, lights, screen, pads, buttons/encoder/strip. Framework-free, no app code.
+                   Public API in index.ts, docs in src/maschine/README.md
+  app/             the React demo app
+    modes/         one mode = one thing the app does with the device (light show, tests, …)
+  dev/             dev-only helpers (log to the dev server)
+examples/
+  minimal/         ~50 lines: connect, pads/buttons/strip/encoder → lights + screen
+vite-plugins/      dev server helpers (full reload on change, hw-bridge for testing)
+src-py-old/        the original Python implementation, reference only
+```
+
+## Build your own
+
+- **Own app, any framework (or none):** copy `examples/minimal`, import from `src/maschine`, and add the page to
+  `build.rollupOptions.input` in `vite.config.ts`. Read [`src/maschine/README.md`](src/maschine/README.md).
+- **A new mode in the demo app:** write `run(maschine, signal, ctx)` (see `src/app/modes/types.ts`), and register it
+  in `src/app/modes/index.ts`. It shows up as a button.
+- **Elsewhere:** `src/maschine` has no dependencies; copy the folder.
+
+Only one page should drive the device at a time (two tabs both write to it).
 
 ## Todo
 
-* Better event handler for the App
-* Make demo Apps
-  * Sequencer ?
+* Layers for lights (background + overlay), see TASK-SEQUENCER.md
+* Own pad sensitivity (from the pressure stream)
+* Sequencer!
 
 ---
+
+<a id="pymikro"></a>
 
 # Pymikro
 
@@ -262,20 +295,3 @@ Buttons:
       'strip_pos_2': 0                                # second value if another finger is on the strip
   }
   ```
-
-### Alternatives
-
-[maschine-mikro-mk3-driver](https://github.com/r00tman/maschine-mikro-mk3-driver)
-
-- Built for Linux only
-- Makes the Maschine Mikro available through a midi interface
-- Coded in Rust
-
-Midi mode
-
-- Windows/OSX only (midi interface emulated by the driver)
-
-- press `shift` and `project` to enter midi mode
-- you can use [mido](https://pypi.org/project/mido/) or any other software to
-  handle the midi commands
-- limited features/customization
