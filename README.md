@@ -18,6 +18,12 @@ On Linux, allow access to the device: `sudo cp 50-ni-maschine.rules /etc/udev/ru
 
 `npm run build` builds all pages to `dist/`.
 
+### GitHub Pages
+
+Every push to `main` builds the site and deploys it to `https://<user>.github.io/<repo>/`
+(see [`.github/workflows/pages.yml`](.github/workflows/pages.yml)). One-time setup in the GitHub repo:
+**Settings → Pages → Build and deployment → Source: GitHub Actions**. Pages is https, so WebHID works there.
+
 ## Structure
 
 ```
@@ -41,12 +47,6 @@ vite-plugins/      dev server helpers (full reload on change, hw-bridge for test
 - **Elsewhere:** `src/maschine` has no dependencies; copy the folder.
 
 Only one page should drive the device at a time (two tabs both write to it).
-
-## Todo
-
-* Layers for lights (background + overlay), see TASK-SEQUENCER.md
-* Own pad sensitivity (from the pressure stream)
-* Sequencer!
 
 ---
 
@@ -80,10 +80,6 @@ Touch strip:
 Screen:
 
 - set text with adjustable size, on 1 or 2 lines
-
-### Implementation
-
-* src/maschine holds the HID protocol basics. 
 
 ## Credits
 

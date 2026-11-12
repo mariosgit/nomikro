@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react';
 import { hwBridge } from './vite-plugins/hw-bridge.ts';
 
 export default defineConfig({
+  // Relative asset paths: the build works at any URL path, e.g. GitHub Pages under /<repo>/
+  base: './',
   plugins: [
     react(),
     hwBridge(),
