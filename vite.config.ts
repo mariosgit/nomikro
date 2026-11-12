@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { hwBridge } from './vite-plugins/hw-bridge';
+import { hwBridge } from './vite-plugins/hw-bridge.ts';
 
 export default defineConfig({
   plugins: [
