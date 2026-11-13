@@ -1,7 +1,7 @@
 // μOp sound: one instrument per track (chosen from the engine registry, src/engine/instruments/),
 // each → track gain (track volume) → low-pass (touch strip) → punch-in FX bus → master gain (volume) → speakers.
 import type { Color } from '../../maschine';
-import { DRUM_KITS, DRUM_ROLES, MELODIC, findInstrument, type DrumKit, type InstrumentDef, type Melodic, type Voice } from '../../engine/instruments';
+import { DRIVE, DRUM_KITS, DRUM_ROLES, MELODIC, clampParam, driveStage, findInstrument, type DrumKit, type InstrumentDef, type Melodic, type Params, type Voice } from '../../engine/instruments';
 import type { TrackKind, TrackMidi } from './model';
 import { midiAllOff, midiNote } from '../../engine/midi';
 import { fromAudioTime } from '../../engine/audio';
@@ -23,10 +23,13 @@ interface Slot {
     drums: DrumKit | null;
     melodic: Melodic | null;
     id: string;
-    /** A random variation (STAR), not stored in the song. */
-    random: boolean;
+    kind: TrackKind | null;
+    /** Pending rebuild after a parameter change (instruments without live set()). */
+    rebuild: ReturnType<typeof setTimeout> | undefined;
     /** Track volume. */
     gain: GainNode;
+    /** Melodic tracks: the Drive parameter (drum kits drive per drum sound themselves). Instruments play into it. */
+    drive: ReturnType<typeof driveStage>;
     /** Bumped per load, so only the latest of overlapping loads wins. */
     loading: number;
     /** MIDI out instead of the instrument. */
@@ -49,27 +52,24 @@ export class Sounds {
         this.fx.output.connect(this.master).connect(ctx.destination);
     }
 
-    /** True while the track plays a random variation (STAR). */
-    isRandom(track: number): boolean {
-        return this.slots.get(track)?.random ?? false;
-    }
-
     /** Track volume 0..1.5 (1 = as designed). */
     setLevel(track: number, level: number): void {
         this.slot(track).gain.gain.setTargetAtTime(level, this.ctx.currentTime, 0.02);
     }
 
     /**
-     * Switches a track's instrument; `random` = a random variation of it. Resolves with the instrument's name once it
-     * plays (the old one plays until then).
+     * Switches a track's instrument, with its parameter values. Resolves with the instrument's name once it plays
+     * (the old one plays until then).
      */
-    async set(track: number, kind: TrackKind, id: string, random = false): Promise<string> {
+    async set(track: number, kind: TrackKind, id: string, params: Params): Promise<string> {
         const slot = this.slot(track);
         const def = findInstrument(soundsFor(kind), id);
+        clearTimeout(slot.rebuild);
         slot.id = def.id;
-        slot.random = random;
+        slot.kind = kind;
         const token = ++slot.loading;
-        const instrument = await def.create(this.ctx, slot.gain, random);
+        this.setDrive(slot, kind, params);
+        const instrument = await def.create(this.ctx, slot.drive.input, { ...params });
         if (this.disposed || token !== slot.loading) {
             instrument.dispose(); // superseded
             return def.name;
@@ -79,6 +79,28 @@ export class Sounds {
         slot.melodic = kind === 'drums' ? null : (instrument as Melodic);
         if (old) setTimeout(() => old.dispose(), 2000); // let its tails ring out
         return def.name;
+    }
+
+    /** New parameter values for the track's instrument: live if it can, else rebuilt shortly after the last change. */
+    tweak(track: number, params: Params): void {
+        const slot = this.slots.get(track);
+        if (!slot?.kind) return;
+        this.setDrive(slot, slot.kind, params);
+        const instrument = slot.drums ?? slot.melodic;
+        if (instrument?.set && slot.loading && !slot.rebuild) {
+            instrument.set({ ...params });
+            return;
+        }
+        clearTimeout(slot.rebuild);
+        const { kind, id } = slot;
+        slot.rebuild = setTimeout(() => {
+            slot.rebuild = undefined;
+            void this.set(track, kind!, id, params);
+        }, 120);
+    }
+
+    private setDrive(slot: Slot, kind: TrackKind, params: Params): void {
+        slot.drive.update(kind === 'drums' ? 0 : clampParam(DRIVE, params.drive ?? 0));
     }
 
     set volume(v: number) {
@@ -127,7 +149,8 @@ export class Sounds {
         if (!slot) {
             const gain = new GainNode(this.ctx, { gain: 1 });
             gain.connect(this.filter);
-            slot = { drums: null, melodic: null, id: '', random: false, gain, loading: 0, midi: null };
+            const drive = driveStage(this.ctx, gain);
+            slot = { drums: null, melodic: null, id: '', kind: null, rebuild: undefined, gain, drive, loading: 0, midi: null };
             this.slots.set(track, slot);
         }
         return slot;

@@ -89,7 +89,16 @@ export class Generator {
         const len = track.length;
         if (track.kind === 'drums') this.drums(steps, len, sound);
         else if (track.kind === 'notes') this.notes(track, steps, len, key);
-        else if (track.kind === 'chords') this.chords(steps, len, key);
+        else if (track.kind === 'chords') {
+            this.chords(steps, len, key);
+            // a chord lasts until the next one (or the end of the track)
+            let next = len;
+            for (let s = len - 1; s >= 0; s--) {
+                if (steps.notes[s] === null) continue;
+                steps.lengths[s] = next - s;
+                next = s;
+            }
+        }
     }
 
     private drums(steps: PatternTrack, len: number, only?: number): void {
@@ -123,6 +132,7 @@ export class Generator {
             }
             const raw = distribute(x[s], spread, bias) * range;
             steps.notes[s] = this.snap(raw, per, follow, range);
+            steps.lengths[s] = 1;
         }
     }
 

@@ -172,33 +172,33 @@ tracks) has the same settings plus the ones that are only set there (name, MIDI 
     Steps = only the strongest moves.
   - Auto: a new variation every 1 / 2 / 4 bars while playing (written into the next pattern; VARIATION lit).
 - [ ] Later: save the generator settings in the song; a "sound" target for VARIATION (vary the
-  track's sound with déjà vu; until then STAR gives a random sound, separate from VARIATION);
+  track's sound with déjà vu; until then PLUG-IN + push randomizes the sound);
   Grids-style drum map (own data, see the license note) if the Marbles-style drums aren't enough.
 - Source / licenses: `../MI-Eurorack` (fork of pichenettes/eurorack). Marbles (`marbles/random/`): **MIT**.
   Grids: **GPL-3.0** (not used). Trademark: don't use "Mutable Instruments" or the module names as names in the app.
 
 ### 6. Step page (hold a step in STEP mode)
-- [ ] Note / chord value (works today with the encoder), velocity.
-- [ ] Variable note length (notes / chords): today every note lasts 0.85 step. Length per step as a parameter, and/or
-  hold a step + tap another step = tie. Live recording keeps how long the pad was held.
-- [ ] Per-step parameter locks (drums: pitch / decay; later any sound parameter).
+- [x] Note / chord value (encoder). Velocity: dropped for now (keep it simple).
+- [x] Note length (notes / chords): length per step 1..16 (track steps), stored as `lengths` in the pattern.
+  - Hold a step: `< >` = Note / Length (lit), encoder changes it. Hold a step + tap a later step = lasts up to there.
+  - Held-over steps glow dim in the note's color. A note sounds `length − 0.15` steps (ratchet FX: short hits).
+  - REC: notes / chords get the length the pad was held. VARIATION: notes 1 step, chords until the next chord.
+  - Nudge / clear / erase / copy / paste / undo carry the lengths; older songs load with length 1.
+  - The next note cuts a long one (mono style, also chords); the dim glow stops there too.
+  - [ ] Later: per-track Poly setting (SELECT page) to let notes overlap (pads, drones).
+- Dropped: per-step parameter locks (too nerdy for μOp).
 
 ### 7. Sounds (PLUG-IN page, STAR, SEARCH)
-- [ ] PLUG-IN page: sound parameters per track (drums: per drum sound), strip = macro / morph.
-- [ ] STAR = save the current sound (engine + settings) as a favorite preset; SEARCH browses sounds incl. favorites.
+- [x] Instruments declare their parameters (`ParamDef` in `src/engine/instruments/types.ts`: range, unit, log,
+  options, random range); values per track in the song (`track.params`), live via `set()` (Tone drums: rebuilt).
+- [x] PLUG-IN page: Sound (browser) + the instrument's parameters, `< >` + encoder. Drums: pads 1–8 pick the drum
+  sound (Tune / Decay / Tone / Level / Drive each).
+  Drive (tanh soft clip, 2× oversampled): per drum sound in the kits, per track for melodic instruments (mixer). Push = randomize (stored), short press = back / forward (A/B).
+- [x] STAR = save the sound (instrument + values) as a favorite (localStorage, all songs). SEARCH = sound browser:
+  instruments, the track's edited sound, favorites ★. App page: browser select, ☆ save, ★× delete.
+- [ ] Later: strip = macro / morph on the PLUG-IN page; favorites rename; sound editor on the app page (part 11).
 - [ ] Sound tuning: rework the sounds that feel weak (needs listening feedback, `src/engine/instruments/`).
 - [ ] More engines: samples (drum kits as WAV/OGG one-shots), smplr, Faust / AudioWorklet.
-- [ ] Mutable Instruments DSP as engines (`../MI-Eurorack`, STM32 projects = **MIT**, keep the copyright notice; don't use
-  the brand / module names as product names). C++ → WebAssembly (Emscripten, not installed yet; commit the built `.wasm`)
-  → AudioWorklet node per track, behind the existing `Melodic` / `DrumKit` contract (SEARCH / STAR / page select work as is).
-  - **Plaits** first: float DSP at 48 kHz, 16 engines incl. bass drum / snare / hi-hat models → melodic instruments + a
-    drum kit from one port. Monophonic: one instance per voice (chords). Harmonics / timbre / morph → PLUG-IN page
-    parameters, p-locks, strip for live morph.
-  - **Rings** (resonator, 48 kHz): pads / plucks, also as an effect on other tracks.
-  - **Elements** (32 kHz internal, heavier CPU): one voice per track, needs resampling.
-  - **Braids** (96 kHz, integer DSP): low priority, Plaits covers most of it.
-  - Watch: sample-accurate note starts inside the 128-sample worklet block (Plaits renders 12–24-sample blocks),
-    wasm size (speech / wavetable data).
 
 ### 8. More
 - [ ] Later: SHIFT functions that need features first:
@@ -226,7 +226,7 @@ tracks) has the same settings plus the ones that are only set there (name, MIDI 
 
 ### 10. Display
 
-- show the transport pos on the blank, move it over the disp to "burn" pixels evenly
+- show the transport pos on the blank, move it over the disp to "burn" pixels evenly (when playing)
 
 - in the App, the pad drawing could show more stuff. like the drum pad sound or the chord or the set note in the step view
 
@@ -239,3 +239,19 @@ To the side of the pad display...
 - add sound editor view - edit params for the sound on the selected track.
 - also during perform - the table of FX from the bottom could be in the help.
 
+### Sound engines
+
+- Keep it simple ??? Plug in a FM1 and do the midi thing ?
+  - usb audio loop back ... se above
+  - midi / audio routing presets for your fav synth (app only)
+- [ ] Mutable Instruments DSP as engines (`../MI-Eurorack`, STM32 projects = **MIT**, keep the copyright notice; don't use
+  the brand / module names as product names). C++ → WebAssembly (Emscripten, not installed yet; commit the built `.wasm`)
+  → AudioWorklet node per track, behind the existing `Melodic` / `DrumKit` contract (SEARCH / STAR / page select work as is).
+  - **Plaits** first: float DSP at 48 kHz, 16 engines incl. bass drum / snare / hi-hat models → melodic instruments + a
+    drum kit from one port. Monophonic: one instance per voice (chords). Harmonics / timbre / morph → PLUG-IN page
+    parameters, p-locks, strip for live morph.
+  - **Rings** (resonator, 48 kHz): pads / plucks, also as an effect on other tracks.
+  - **Elements** (32 kHz internal, heavier CPU): one voice per track, needs resampling.
+  - **Braids** (96 kHz, integer DSP): low priority, Plaits covers most of it.
+  - Watch: sample-accurate note starts inside the 128-sample worklet block (Plaits renders 12–24-sample blocks),
+    wasm size (speech / wavetable data).

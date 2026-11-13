@@ -2,6 +2,7 @@
 //
 // Track kinds: 'drums' (8 drum sounds × 16 steps, velocity), 'notes' (one note per step: scale degree),
 // 'chords' (one chord per step: chord number 0..15, see chordNotes()). kind null = empty track.
+import type { Params } from '../../engine/instruments';
 
 export const STEPS = 16;
 export const PATTERNS = 16;
@@ -15,6 +16,8 @@ export interface Track {
     name: string;
     /** Instrument id (src/engine/instruments/): a drum kit for 'drums', a melodic instrument otherwise. */
     sound: string;
+    /** The sound's parameter values (PLUG-IN page), missing = the instrument's default. */
+    params: Params;
     /** Track volume 0..1.5 (1 = as designed). */
     level: number;
     /** Octave offset for notes / chords (bass: -1). */
@@ -58,7 +61,12 @@ export interface PatternTrack {
     drums: number[][];
     /** notes: scale degree per step; chords: chord number per step; null = rest */
     notes: (number | null)[];
+    /** notes / chords: length per step in track steps (1 = one step, more = held over the next steps). */
+    lengths: number[];
 }
+
+/** Longest note: a whole bar. */
+export const MAX_LENGTH = STEPS;
 
 /** A recorded punch-in FX on a step: FX number 0..15 (see fx.ts), `track` for the track FX (pads 1–8). */
 export interface FxHit {
@@ -91,20 +99,23 @@ export interface Song {
 export type Key = Pick<Song, 'root' | 'scale'>;
 
 const TRACK_DEFAULTS = { rate: 1, length: STEPS, midi: null, harmony: 'free', voicing: 0 } as const;
-const emptyTrack = (n: number): Track => ({ kind: null, name: `Track ${n + 1}`, sound: '', level: 1, octave: 0, ...TRACK_DEFAULTS });
+const emptyTrack = (n: number): Track => ({ kind: null, name: `Track ${n + 1}`, sound: '', params: {}, level: 1, octave: 0, ...TRACK_DEFAULTS });
 
 /** Tracks 1–4 of a new song. */
 const DEFAULT_TRACKS: Track[] = [
-    { kind: 'drums', name: 'Drums', sound: 'tone', level: 1, octave: 0, ...TRACK_DEFAULTS },
-    { kind: 'notes', name: 'Bass', sound: 'basic-lead', level: 1, octave: -1, ...TRACK_DEFAULTS },
-    { kind: 'chords', name: 'Chords', sound: 'tone-pad', level: 0.8, octave: 0, ...TRACK_DEFAULTS },
-    { kind: 'notes', name: 'Lead', sound: 'tone-mono', level: 1, octave: 0, ...TRACK_DEFAULTS },
+    { kind: 'drums', name: 'Drums', sound: 'tone', params: {}, level: 1, octave: 0, ...TRACK_DEFAULTS },
+    { kind: 'notes', name: 'Bass', sound: 'basic-lead', params: {}, level: 1, octave: -1, ...TRACK_DEFAULTS },
+    { kind: 'chords', name: 'Chords', sound: 'tone-pad', params: {}, level: 0.8, octave: 0, ...TRACK_DEFAULTS },
+    { kind: 'notes', name: 'Lead', sound: 'tone-mono', params: {}, level: 1, octave: 0, ...TRACK_DEFAULTS },
 ];
 
 export const emptyPatternTrack = (): PatternTrack => ({
     drums: Array.from({ length: DRUMS }, () => Array<number>(STEPS).fill(0)),
     notes: Array<number | null>(STEPS).fill(null),
+    lengths: Array<number>(STEPS).fill(1),
 });
+
+export const clonePatternTrack = (t: PatternTrack): PatternTrack => ({ drums: t.drums.map((row) => [...row]), notes: [...t.notes], lengths: [...t.lengths] });
 
 export const emptyPattern = (): Pattern => ({
     tracks: Array.from({ length: TRACKS }, emptyPatternTrack),
@@ -112,7 +123,7 @@ export const emptyPattern = (): Pattern => ({
 });
 
 export const clonePattern = (p: Pattern): Pattern => ({
-    tracks: p.tracks.map((t) => ({ drums: t.drums.map((row) => [...row]), notes: [...t.notes] })),
+    tracks: p.tracks.map(clonePatternTrack),
     fx: p.fx.map((hits) => hits.map((h) => ({ ...h }))),
 });
 
@@ -132,7 +143,7 @@ export function newSong(): Song {
     [7, null, null, 9, null, null, 11, null, 9, null, null, 7, null, 4, null, null].forEach((d, s) => (lead.notes[s] = d));
     return {
         version: 2,
-        tracks: Array.from({ length: TRACKS }, (_, i) => (DEFAULT_TRACKS[i] ? { ...DEFAULT_TRACKS[i] } : emptyTrack(i))),
+        tracks: Array.from({ length: TRACKS }, (_, i) => (DEFAULT_TRACKS[i] ? { ...DEFAULT_TRACKS[i], params: {} } : emptyTrack(i))),
         patterns,
         chain: [0],
         bpm: 110,
@@ -262,7 +273,10 @@ export function loadSong(): Song {
         if (raw) {
             const s = JSON.parse(raw) as Song;
             if (s.version === 2 && s.tracks?.length === TRACKS && s.patterns?.length === PATTERNS && s.chain?.length) {
-                for (const p of s.patterns) p.fx ??= Array.from({ length: STEPS }, () => []); // saved before punch-in FX
+                for (const p of s.patterns) {
+                    p.fx ??= Array.from({ length: STEPS }, () => []); // saved before punch-in FX
+                    for (const t of p.tracks) t.lengths ??= Array<number>(STEPS).fill(1); // saved before note lengths
+                }
                 for (const t of s.tracks) {
                     // saved before clock / length / MIDI per track
                     t.rate ??= 1;
@@ -270,6 +284,7 @@ export function loadSong(): Song {
                     t.midi ??= null;
                     t.harmony ??= 'free';
                     t.voicing ??= 0;
+                    t.params ??= {}; // saved before sound parameters
                 }
                 s.root ??= 9; // A minor was fixed before
                 s.scale ??= 'minor';

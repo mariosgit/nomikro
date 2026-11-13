@@ -15,6 +15,8 @@ import {
     chordName,
     chordRoot,
     clonePattern,
+    clonePatternTrack,
+    MAX_LENGTH,
     findScale,
     isEmptyPattern,
     keyName,
@@ -38,8 +40,9 @@ import { FX, isTrackFx } from './fx';
 import { devlog } from '../../dev/devlog';
 import { Metronome } from '../../engine/metronome';
 import { DRUM_SOUNDS, soundsFor, type Sounds } from './sounds';
-import { findInstrument, nextInstrument, type Voice } from '../../engine/instruments';
-import { Pages, TAP_MS, type Cell, type Help, type Page } from './page';
+import { findInstrument, formatParam, randomParam, stepParam, type ParamDef, type Params, type Voice } from '../../engine/instruments';
+import { Pages, TAP_MS, type Cell, type Help, type Page, type Param } from './page';
+import { addFavorite, favoriteOf, favorites, indexIn, removeFavorite, soundList, type SoundEntry } from './favorites';
 import { History } from './history';
 import { requestMidi } from '../../engine/midi';
 import { harmonyTrack, nextChordWeights, trackMidis } from './harmony';
@@ -58,8 +61,10 @@ export interface TrackView {
     midi: TrackMidi | null;
     harmony: Track['harmony'];
     voicing: number;
-    /** Plays a random variation (STAR, not stored). */
-    random: boolean;
+    /** The favorite (STAR) this track's sound is, null = none. */
+    favorite: string | null;
+    /** The sound's parameter values (missing = default). */
+    params: Params;
 }
 
 /** Track settings, changed on the device (SELECT page) or on the app page (track list). */
@@ -119,14 +124,16 @@ const HELP_TOP: Help[] = [
     { keys: 'PAD MODE / KEYBOARD / CHORDS', text: 'Shortcuts: drums track · bass ↔ lead · chords track' },
     { keys: 'Pads', text: 'Play. Drums: pads 1–8 (selects the sound). Notes: the scale of the song key over 16 pads (root = orange); with harmony "follow" the chord tones root / 3rd / 5th going up. Chords: pads 1–8 triads of the key, 9–16 the same as 7th chords; after a chord the likely next chords light brighter (last one = white)' },
     { keys: 'Harmony', text: 'The first chords track leads (its chord holds until the next one). Notes tracks (SELECT page / track list): free = as written, transpose = shifted by the chord root, follow = values are chord tones' },
-    { keys: 'STEP', text: 'Pads = 16 steps. Drums: tap toggles the selected sound. Notes / chords: tap writes the last played note / chord, tap again clears, hold + encoder changes it' },
+    { keys: 'STEP', text: 'Pads = 16 steps. Drums: tap toggles the selected sound. Notes / chords: tap writes the last played note / chord, tap again clears' },
+    { keys: 'STEP: hold a step', text: 'Notes / chords: < > = Note / Length, encoder changes it. Hold a step + tap a later step = the note lasts up to there. Held-over steps glow dim in the note’s color. The next note cuts a long one (mono style)' },
+    { keys: 'REC + pads', text: 'Notes / chords: recorded with the length you hold the pad' },
     { keys: 'STEP (hold)', text: 'Switches to the other view only while held (e.g. pick another drum sound on the play pads), release = back. A short press toggles' },
     { keys: 'PLAY / STOP / REC', text: 'Play/pause · stop and rewind · live recording into the nearest step while playing' },
     { keys: 'RESTART', text: 'Play from the start of the current pattern right away (a queued pattern / chain starts right away instead)' },
 ];
 const HELP_BOTTOM: Help[] = [
     { keys: 'Touch strip', text: 'Low-pass filter while touched' },
-    { keys: 'STAR', text: "Random variation of the current track's sound: temporary, not saved (STAR lit while active, SEARCH or a reload goes back)" },
+    { keys: 'STAR', text: 'Save the current sound (instrument + parameters) as a favorite, for all songs. Favorites come after the instruments in the sound browser (SEARCH, PLUG-IN). STAR lit = the sound is a favorite. Delete them on the app page' },
     { keys: 'Button lights', text: 'Dim = usable, bright = active / held. While a page is held, only what it uses stays lit' },
 ];
 
@@ -161,6 +168,10 @@ export class MuOpController {
     /** Notes / chords step held in step mode: encoder edits it; a tap without edit on an existing one clears it. */
     private heldStep: { pad: number; created: boolean; edited: boolean } | null = null;
     private liveVoices = new Map<number, Voice[]>();
+    /** Pads held while recording notes: where the hit went (its length is set on release). */
+    private recPads = new Map<number, { track: number; at: { pattern: number; step: number } }>();
+    /** Held step menu: 0 = note, 1 = length (`< >`), kept between holds. */
+    private stepParam = 0;
     /** Pads held as punch-in FX (PERFORM + pad), released on padUp even after PERFORM was let go. */
     private fxPads = new Map<number, FxHit>();
     /** FX active on the last played step (recorded + live), for the lights / page. */
@@ -222,7 +233,7 @@ export class MuOpController {
         this.song.tracks.forEach((t, i) => {
             if (!t.kind) return;
             this.sounds.setLevel(i, t.level);
-            void this.setSound(i, t.sound, false);
+            void this.setSound(i, t.sound, false, t.params);
         });
         this.song.tracks.forEach((t, i) => this.sounds.setMidi(i, t.midi));
         if (this.song.tracks.some((t) => t.midi)) void requestMidi();
@@ -243,28 +254,127 @@ export class MuOpController {
         }
     }
 
-    /**
-     * Switches a track's instrument (page select / SEARCH), stored in the song.
-     * `random` (STAR): a random variation of it, temporary: the song keeps the instrument id, a reload brings the original back.
-     */
-    async setSound(track: number, id: string, announce = true, random = false): Promise<void> {
+    /** Switches a track's instrument with its parameter values (sound browser, track list), stored in the song. */
+    async setSound(track: number, id: string, announce = true, params: Params = {}): Promise<void> {
         const t = this.song.tracks[track];
         if (!t.kind) return;
         const def = findInstrument(soundsFor(t.kind), id);
-        const loading = this.sounds.set(track, t.kind, def.id, random);
-        if (!random) {
-            t.sound = def.id;
-            this.saveSoon();
-        }
+        t.sound = def.id;
+        t.params = { ...params };
+        const loading = this.sounds.set(track, t.kind, def.id, t.params);
+        this.saveSoon();
         this.update();
         try {
             const name = await loading;
-            devlog('event', { app: 'muop', line: `sound T${track + 1}: ${random ? 'random ' : ''}${name}` });
-            if (announce) this.say(`${this.label(track)}\n${random ? 'Random: ' : ''}${name}`);
+            devlog('event', { app: 'muop', line: `sound T${track + 1}: ${name}` });
+            if (announce) this.say(`${this.label(track)}\n${this.soundName(track)}`);
         } catch (error) {
             this.say(`Sound failed\n${String(error).slice(0, 40)}`);
             devlog('error', { app: 'muop', sound: id, error: String(error) });
         }
+    }
+
+    // --- Sounds: browser, parameters, favorites ---
+
+    /** Per track: its last edited sound (listed in the browser, so browsing away and back finds it). */
+    private edited = new Map<number, { sound: string; params: Params }>();
+    /** Per track: the sound before the last randomize (PLUG-IN short press swaps back, A/B). */
+    private beforeRandom = new Map<number, Params>();
+
+    private soundEntries(track: number): SoundEntry[] {
+        const t = this.song.tracks[track];
+        return t.kind ? soundList(t.kind, this.edited.get(track) ?? { sound: t.sound, params: t.params }) : [];
+    }
+
+    /** The track's sound as the browser lists it ("Mono lead", "Mono lead (edited)", "★ Mono lead 2"). */
+    private soundName(track: number): string {
+        const t = this.song.tracks[track];
+        if (!t.kind) return EMPTY;
+        const list = this.soundEntries(track);
+        return list[indexIn(t.kind, list, t.sound, t.params)]?.name ?? findInstrument(soundsFor(t.kind), t.sound).name;
+    }
+
+    /** SEARCH / PLUG-IN "Sound": steps through the browser list (wraps). */
+    private browse(track: number, delta: number, announce: boolean): void {
+        const t = this.song.tracks[track];
+        if (!t.kind) return this.say(`${this.label(track)}\n${EMPTY}`);
+        const list = this.soundEntries(track);
+        let i = indexIn(t.kind, list, t.sound, t.params);
+        if (i < 0) i = Math.max(0, list.findIndex((e) => e.sound === t.sound));
+        const e = list[(((i + delta) % list.length) + list.length) % list.length];
+        void this.setSound(track, e.sound, announce, e.params);
+    }
+
+    /** The parameters PLUG-IN shows: the instrument's (drums: the selected drum sound's). */
+    private shownParams(): ParamDef[] {
+        const kind = this.cur.kind;
+        if (!kind) return [];
+        const defs = findInstrument(soundsFor(kind), this.cur.sound).params;
+        return kind === 'drums' ? defs.filter((d) => d.id.startsWith(`${this.drumSound}.`)) : [...defs];
+    }
+
+    private paramValue(def: ParamDef): number {
+        return this.cur.params[def.id] ?? def.default;
+    }
+
+    /** Changes the track's parameter values (live where the instrument can), saved in the song. */
+    private setParams(track: number, params: Params): void {
+        const t = this.song.tracks[track];
+        if (!t.kind) return;
+        t.params = params;
+        this.edited.set(track, { sound: t.sound, params: { ...params } });
+        this.sounds.tweak(track, t.params);
+        this.saveSoon();
+        this.update();
+    }
+
+    setParam(track: number, def: ParamDef, value: number): void {
+        this.setParams(track, { ...this.song.tracks[track].params, [def.id]: value });
+    }
+
+    /** PLUG-IN + push: random values for the shown parameters. */
+    private randomize(track: number): void {
+        const t = this.song.tracks[track];
+        if (!t.kind) return this.say(`${this.label(track)}\n${EMPTY}`);
+        this.beforeRandom.set(track, { ...t.params });
+        const params = { ...t.params };
+        for (const def of this.shownParams()) params[def.id] = randomParam(def);
+        this.setParams(track, params);
+        // hear it: drum kits may be rebuilt (~120 ms), so the drum plays a bit later
+        if (t.kind === 'drums') {
+            const sound = this.drumSound;
+            setTimeout(() => this.sounds.drum(track, sound, this.sounds.ctx.currentTime, 0.8), 250);
+        } else if (track === this.track) this.preview(this.pens[track]);
+        this.say(`Random\n${t.kind === 'drums' ? DRUM_SOUNDS[this.drumSound].name : this.soundName(track)}`);
+    }
+
+    /** PLUG-IN short press: back to before the last randomize (and forward again). */
+    private revert(track: number): void {
+        const before = this.beforeRandom.get(track);
+        if (!before) return this.say('Sound\nnothing to go back to');
+        this.beforeRandom.set(track, { ...this.song.tracks[track].params });
+        this.setParams(track, before);
+        this.say('Sound\nswapped (A/B)');
+    }
+
+    /** STAR (and the app page): the track's sound becomes a favorite. */
+    saveFavorite(track = this.track): void {
+        const t = this.song.tracks[track];
+        if (!t.kind) return this.say(`${this.label(track)}\n${EMPTY}`);
+        const fav = favoriteOf(t.kind, t.sound, t.params);
+        if (fav >= 0) return this.say(`Favorite\n★ ${favorites()[fav].name}`);
+        const name = addFavorite(t.kind, t.sound, t.params);
+        this.say(`Saved favorite\n★ ${name}`);
+        this.update();
+    }
+
+    /** App page: deletes a favorite (tracks using that sound keep it, as an edited sound). */
+    deleteFavorite(index: number): void {
+        const fav = favorites()[index];
+        if (!fav) return;
+        removeFavorite(index);
+        this.say(`Deleted favorite\n${fav.name}`);
+        this.update();
     }
 
     /** Selects a track (SELECT + pad, page). An empty track becomes a notes track with a random sound (kind: SELECT page). */
@@ -427,6 +537,7 @@ export class MuOpController {
                 c.history.edit(c.seq.pattern);
                 if (kind !== 'drums') {
                     steps.notes.fill(null);
+                    steps.lengths.fill(1);
                     c.say(`Erase\n${c.label(c.track)}`);
                 } else if (pad < DRUMS) {
                     steps.drums[pad].fill(0);
@@ -500,31 +611,64 @@ export class MuOpController {
             ],
         };
 
+        /** The sound browser (instruments, the track's edited sound, favorites) as a `< >` parameter. */
+        const soundParam: Param = {
+            name: 'Sound',
+            help: 'browse the sounds of the current track: the instruments, its edited sound, then the favorites (★)',
+            value: () => (c.cur.kind ? c.soundName(c.track) : 'empty track'),
+            step: (d) => c.browse(c.track, d, false),
+        };
         const search: Page = {
             button: 'search',
             name: 'Sound',
-            params: [
-                {
-                    name: 'Sound',
-                    help: 'Browse the sounds of the current track (also selectable in the track list)',
-                    value: () => (c.cur.kind ? findInstrument(soundsFor(c.cur.kind), c.cur.sound).name : 'empty track'),
-                    step: (d) => {
-                        const kind = c.cur.kind;
-                        if (!kind) return;
-                        let id = c.cur.sound;
-                        for (let i = 0; i < Math.abs(d); i++) id = nextInstrument(soundsFor(kind), id, Math.sign(d)).id;
-                        void c.setSound(c.track, id, false);
-                    },
-                },
-            ],
-            tap: {
-                name: 'Next sound for the current track',
-                run: () => {
-                    const kind = c.cur.kind;
-                    if (!kind) return c.say(`${c.label(c.track)}\n${EMPTY}`);
-                    void c.setSound(c.track, nextInstrument(soundsFor(kind), c.cur.sound, 1).id);
-                },
+            params: [soundParam],
+            tap: { name: 'Next sound for the current track', run: () => c.browse(c.track, 1, true) },
+        };
+
+        const plugin: Page = {
+            button: 'plug_in',
+            get name() {
+                if (!c?.cur.kind) return 'Sound';
+                return c.cur.kind === 'drums' ? DRUM_SOUNDS[c.drumSound].name : findInstrument(soundsFor(c.cur.kind), c.cur.sound).name;
             },
+            get hint() {
+                return c?.cur.kind ? undefined : EMPTY;
+            },
+            // Sound, then the instrument's parameters (drums: those of the selected drum sound)
+            get params(): Param[] {
+                if (!c?.cur.kind) return [];
+                return [
+                    soundParam,
+                    ...c.shownParams().map((def) => ({
+                        name: def.name,
+                        value: () => formatParam(def, c.paramValue(def)),
+                        step: (d: number) => c.setParam(c.track, def, stepParam(def, c.paramValue(def), d)),
+                    })),
+                ];
+            },
+            // drums: pads 1–8 pick the drum sound (and play it); notes / chords: the pads stay playable
+            get cells() {
+                if (c?.cur.kind !== 'drums') return undefined;
+                return () => Array.from({ length: 16 }, (_, i): Cell => (i < DRUMS ? { color: DRUM_SOUNDS[i].color, level: i === c.drumSound ? 3 : 1 } : OFF));
+            },
+            get padDown() {
+                if (c?.cur.kind !== 'drums') return undefined;
+                return (pad: number, velocity: number) => {
+                    if (pad >= DRUMS) return;
+                    c.drumSound = pad;
+                    c.sounds.drum(c.track, pad, c.sounds.ctx.currentTime, velocity);
+                    c.pages.refresh();
+                };
+            },
+            apply: { name: 'Randomize the sound (drums: the selected drum sound); stored, a short press goes back', run: () => c.randomize(c.track) },
+            tap: { name: 'Back to the sound before the last randomize; again = forward (A/B)', run: () => c.revert(c.track) },
+            help: [
+                {
+                    keys: 'PLUG-IN + < > + encoder',
+                    text: 'Sound (the browser), then the instrument’s parameters (wave, cutoff, envelope, …, Drive = distortion). Changes play right away and are saved with the track',
+                },
+                { keys: 'PLUG-IN + pad 1–8', text: 'Drums: pick the drum sound to edit (Tune, Decay, Tone, Level, Drive per drum sound)' },
+            ],
         };
 
         // via the prototype: `c` is null when building the cheat sheet (shiftFunctions only uses `this` in callbacks)
@@ -700,7 +844,7 @@ export class MuOpController {
             ],
         };
 
-        return [select, pattern, duplicate, erase, perform, tempo, swing, volume, search, chords, variation, shift];
+        return [select, pattern, duplicate, erase, perform, tempo, swing, volume, search, plugin, chords, variation, shift];
     }
 
     // --- input ---
@@ -740,9 +884,10 @@ export class MuOpController {
         const seq = this.seq;
         const shift = this.m.input.isHeld('shift');
         const kind = this.cur.kind;
-        if (button === 'star') {
-            if (!kind) return this.say(`${this.label(this.track)}\n${EMPTY}`);
-            return void this.setSound(this.track, this.cur.sound, true, true);
+        if (button === 'star') return this.saveFavorite();
+        if ((button === 'arrow_left' || button === 'arrow_right') && this.heldStep && kind && kind !== 'drums') {
+            this.stepParam = button === 'arrow_right' ? 1 : 0;
+            return this.showStep();
         }
         if (button === 'tap' && shift) {
             return this.say(this.metronome.toggle() ? 'Metronome on' : 'Metronome off');
@@ -791,6 +936,12 @@ export class MuOpController {
         const now = this.sounds.ctx.currentTime;
         if (this.stepMode) {
             if (pad >= this.cur.length) return this.say(`Step ${pad + 1}\nlength ${this.cur.length}`);
+            const held = this.heldStep;
+            if (held && kind !== 'drums') {
+                // hold a step + tap a later one: the note lasts up to there
+                if (pad > held.pad) this.setStepLength(held.pad, pad - held.pad + 1);
+                return;
+            }
             if (kind === 'drums') {
                 this.history.edit(this.seq.pattern);
                 const row = steps.drums[this.drumSound];
@@ -799,12 +950,13 @@ export class MuOpController {
             } else if (steps.notes[pad] === null) {
                 this.history.edit(this.seq.pattern);
                 steps.notes[pad] = this.pens[this.track];
+                steps.lengths[pad] = 1;
                 this.preview(this.pens[this.track]);
                 this.heldStep = { pad, created: true, edited: false };
-                this.say(`Step ${pad + 1}\n${this.valueName(this.pens[this.track])}`);
+                this.showStep();
             } else {
                 this.heldStep = { pad, created: false, edited: false };
-                this.say(`Step ${pad + 1}\n${this.valueName(steps.notes[pad]!)}`);
+                this.showStep();
             }
             return this.saveSoon();
         }
@@ -821,7 +973,11 @@ export class MuOpController {
             this.pens[this.track] = pad;
             for (const v of this.liveVoices.get(pad) ?? []) v.release();
             this.liveVoices.set(pad, this.midis(pad).map((midi) => this.sounds.note(this.track, midi, now, velocity)));
-            if (this.recording && this.seq.record(target, time, pad)) this.saveSoon();
+            const at = this.recording ? this.seq.record(target, time, pad) : null;
+            if (at) {
+                this.recPads.set(pad, { track: this.track, at });
+                this.saveSoon();
+            }
             this.say(this.valueName(pad));
         }
         this.flash(pad, this.padColor(pad), 0);
@@ -862,12 +1018,21 @@ export class MuOpController {
         this.liveVoices.delete(pad);
         if (!this.flashTimers.has(pad)) this.flashLayer.pad(pad, 'off');
 
+        const rec = this.recPads.get(pad);
+        if (rec) {
+            this.recPads.delete(pad);
+            this.seq.recordLength(rec.track, rec.at, duration);
+            this.saveSoon();
+        }
+
         const held = this.heldStep;
         if (held?.pad === pad) {
             // a short tap on a set step clears it; holding it (to look at / edit it) doesn't
             if (!held.created && !held.edited && duration < TAP_MS) {
                 this.history.edit(this.seq.pattern);
-                this.song.patterns[this.seq.pattern].tracks[this.track].notes[pad] = null;
+                const steps = this.song.patterns[this.seq.pattern].tracks[this.track];
+                steps.notes[pad] = null;
+                steps.lengths[pad] = 1;
                 this.saveSoon();
                 this.say(`Step ${pad + 1}\ncleared`);
             }
@@ -878,6 +1043,12 @@ export class MuOpController {
     /** Encoder when no page took it: edits the held step (STEP mode, notes / chords). */
     private encoder(delta: number): void {
         const t = this.cur;
+        if (this.heldStep && t.kind && t.kind !== 'drums' && this.stepParam === 1) {
+            const steps = this.song.patterns[this.seq.pattern].tracks[this.track];
+            if (steps.notes[this.heldStep.pad] === null) return;
+            this.setStepLength(this.heldStep.pad, steps.lengths[this.heldStep.pad] + delta);
+            return;
+        }
         if (this.heldStep && t.kind && t.kind !== 'drums') {
             const notes = this.song.patterns[this.seq.pattern].tracks[this.track].notes;
             const [lo, hi] = t.kind === 'chords' ? [0, CHORDS - 1] : [MIN_DEGREE, MAX_DEGREE];
@@ -887,11 +1058,35 @@ export class MuOpController {
             this.pens[this.track] = value;
             this.heldStep.edited = true;
             this.preview(value);
-            this.say(`Step ${this.heldStep.pad + 1}\n${this.valueName(value)}`);
+            this.showStep();
         } else {
             return;
         }
         this.saveSoon();
+    }
+
+    /** Length of a notes / chords step, 1..MAX_LENGTH (and the track's length). */
+    private setStepLength(pad: number, length: number): void {
+        const steps = this.song.patterns[this.seq.pattern].tracks[this.track];
+        if (steps.notes[pad] === null) return;
+        this.history.edit(this.seq.pattern);
+        steps.lengths[pad] = clamp(length, 1, Math.min(MAX_LENGTH, this.cur.length));
+        if (this.heldStep?.pad === pad) this.heldStep.edited = true;
+        this.stepParam = 1;
+        this.showStep();
+        this.saveSoon();
+    }
+
+    /** Display for the held step: its menu (Note / Length with `< >`). */
+    private showStep(): void {
+        const held = this.heldStep;
+        if (!held) return;
+        const steps = this.song.patterns[this.seq.pattern].tracks[this.track];
+        const n = steps.notes[held.pad];
+        if (n === null) return this.say(`Step ${held.pad + 1}\nempty`);
+        const len = steps.lengths[held.pad];
+        const value = this.stepParam === 0 ? `Note: ${this.valueName(n)}` : `Length: ${len} step${len > 1 ? 's' : ''}`;
+        this.say(`Step ${held.pad + 1}  ${this.stepParam + 1}/2\n${value}`);
     }
 
     // --- VARIATION ---
@@ -997,7 +1192,10 @@ export class MuOpController {
         if (this.cur.kind === 'drums') {
             if (one) rotate(steps.drums[this.drumSound]);
             else steps.drums.forEach(rotate);
-        } else rotate(steps.notes);
+        } else {
+            rotate(steps.notes);
+            rotate(steps.lengths);
+        }
         this.saveSoon();
         this.say(`Nudge ${dir > 0 ? '>' : '<'}\n${one ? DRUM_SOUNDS[this.drumSound].name : this.label(this.track)}`);
     }
@@ -1006,6 +1204,7 @@ export class MuOpController {
         const steps = this.song.patterns[this.seq.pattern].tracks[this.track];
         this.history.edit(this.seq.pattern);
         steps.notes.fill(null);
+        steps.lengths.fill(1);
         for (const row of steps.drums) row.fill(0);
         this.saveSoon();
         this.say(`Clear\n${this.label(this.track)}`);
@@ -1020,14 +1219,14 @@ export class MuOpController {
 
     private copyTrack(): void {
         const steps = this.song.patterns[this.seq.pattern].tracks[this.track];
-        this.clipboard = { kind: this.cur.kind!, steps: { drums: steps.drums.map((row) => [...row]), notes: [...steps.notes] } };
+        this.clipboard = { kind: this.cur.kind!, steps: clonePatternTrack(steps) };
         this.say(`Copy\n${this.label(this.track)} P${this.seq.pattern + 1}`);
     }
 
     private pasteTrack(): void {
         const clip = this.clipboard!;
         this.history.edit(this.seq.pattern);
-        this.song.patterns[this.seq.pattern].tracks[this.track] = { drums: clip.steps.drums.map((row) => [...row]), notes: [...clip.steps.notes] };
+        this.song.patterns[this.seq.pattern].tracks[this.track] = clonePatternTrack(clip.steps);
         this.saveSoon();
         this.say(`Paste\n${this.label(this.track)} P${this.seq.pattern + 1}`);
     }
@@ -1116,6 +1315,16 @@ export class MuOpController {
 
         if (!kind) return all(() => OFF);
         if (this.stepMode) {
+            // steps a longer note is held over (dim, in its color)
+            const tails: (Color | null)[] = Array(16).fill(null);
+            if (kind !== 'drums') {
+                steps.notes.forEach((n, s) => {
+                    if (n === null || s >= this.cur.length) return;
+                    const color = kind === 'chords' ? noteColor(chordRoot(n)) : noteColor(n);
+                    // up to the next note (it cuts this one)
+                    for (let j = s + 1; j < Math.min(this.cur.length, s + steps.lengths[s]) && steps.notes[j] === null; j++) tails[j] = color;
+                });
+            }
             return all((s): Cell => {
                 if (s >= this.cur.length) return OFF; // beyond the track's length
                 if (kind === 'drums') {
@@ -1124,6 +1333,7 @@ export class MuOpController {
                 } else {
                     const n = steps.notes[s];
                     if (n !== null) return { color: kind === 'chords' ? noteColor(chordRoot(n)) : noteColor(n), level: 3 };
+                    if (tails[s]) return { color: tails[s]!, level: 1 };
                 }
                 return s % 4 === 0 ? { color: 'white', level: 1 } : OFF;
             });
@@ -1168,10 +1378,14 @@ export class MuOpController {
             ['stop', 1],
             ['restart', 1],
             ['tap', this.metronome.enabled ? (beat ? 4 : 2) : 1],
-            ['star', this.sounds.isRandom(this.track) ? 3 : input.isHeld('star') ? 4 : 1],
+            ['star', input.isHeld('star') ? 4 : kind && favoriteOf(kind, this.cur.sound, this.cur.params) >= 0 ? 3 : 1],
             ['perform', this.activeFx().length ? 3 : 1],
             ['variation', this.generators.get(this.track)?.settings.auto ? 3 : 1],
         ]);
+        if (this.heldStep && kind && kind !== 'drums') {
+            levels.set('arrow_left', input.isHeld('arrow_left') ? 4 : 1);
+            levels.set('arrow_right', input.isHeld('arrow_right') ? 4 : 1);
+        }
         const lit = this.pages.lights(levels, (b) => input.isHeld(b));
         for (const b of LED_BUTTONS) l.button(b, lit.get(b) ?? 0);
         l.flush();
@@ -1232,7 +1446,8 @@ export class MuOpController {
                 midi: t.midi,
                 harmony: t.harmony,
                 voicing: t.voicing,
-                random: this.sounds.isRandom(i),
+                favorite: t.kind ? favorites()[favoriteOf(t.kind, t.sound, t.params)]?.name ?? null : null,
+                params: t.params,
             })),
             stepMode: this.stepMode,
             drumSound: this.drumSound,

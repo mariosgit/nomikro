@@ -85,6 +85,11 @@ export class Pages {
         return this.held[this.held.length - 1];
     }
 
+    /** Shows the active page's current parameter again (after the page's data changed). */
+    refresh(): void {
+        if (this.active) this.show(this.active);
+    }
+
     isPageButton(button: string): boolean {
         return this.byButton.has(button);
     }

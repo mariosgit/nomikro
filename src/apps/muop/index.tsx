@@ -8,6 +8,7 @@ import { MuOpController, trackColor, type Cell, type MuOpView, type TrackView } 
 import { HARMONY_MODES, KINDS, NOTE_NAMES, RATES, SCALES, STEPS, VOICINGS, kindName, loadSong, rateName, type HarmonyMode, type TrackKind } from './model';
 import { midiOutputs, onMidiChange, requestMidi, type MidiPortInfo } from '../../engine/midi';
 import { DRUM_SOUNDS, Sounds, soundsFor } from './sounds';
+import { favoriteOf, indexIn, soundList } from './favorites';
 import { FX } from './fx';
 import { buttonLabel, type Help as HelpRow } from './page';
 
@@ -241,7 +242,7 @@ function TrackRow({ i, t, selected, ctl, ports }: { i: number; t: TrackView; sel
             </td>
             <td className={TD} onClick={stop}>
                 {t.kind && !t.midi ? (
-                    <SoundSelect value={t.sound} random={t.random} defs={soundsFor(t.kind)} onChange={(id) => ctl.setSound(i, id)} />
+                    <SoundSelect i={i} t={t} kind={t.kind} ctl={ctl} />
                 ) : (
                     <span className="text-xs text-zinc-400">{t.midi ? 'MIDI' : '–'}</span>
                 )}
@@ -366,32 +367,46 @@ function NameInput({ value, onChange }: { value: string; onChange(name: string):
     );
 }
 
-function SoundSelect({
-    value,
-    random,
-    defs,
-    onChange,
-}: {
-    value: string;
-    random: boolean;
-    defs: readonly { id: string; name: string; engine: string }[];
-    onChange(id: string): void;
-}) {
+/** The sound browser (instruments, the edited sound, favorites ★), plus save / delete favorite. */
+function SoundSelect({ i, t, kind, ctl }: { i: number; t: TrackView; kind: TrackKind; ctl: MuOpController }) {
+    const list = soundList(kind, { sound: t.sound, params: t.params });
+    const current = indexIn(kind, list, t.sound, t.params);
+    const fav = favoriteOf(kind, t.sound, t.params);
+    const engine = (id: string) => soundsFor(kind).find((d) => d.id === id)?.engine ?? '';
     return (
-        <label className="inline-flex items-center gap-1">
+        <span className="inline-flex items-center gap-1">
             <select
-                value={value}
-                onChange={(e) => onChange(e.target.value)}
+                value={current}
+                onChange={(e) => {
+                    const entry = list[Number(e.target.value)];
+                    if (entry) void ctl.setSound(i, entry.sound, false, entry.params);
+                }}
                 className={SELECT}
             >
-                {defs.map((d) => (
-                    <option key={d.id} value={d.id} className="text-zinc-900">
-                        {d.name} ({d.engine})
+                {list.map((e, k) => (
+                    <option key={k} value={k} className="text-zinc-900">
+                        {e.favorite === undefined ? `${e.name} (${engine(e.sound)})` : e.name}
                     </option>
                 ))}
             </select>
-            {random && <span className="text-xs font-medium text-orange-500">★ random</span>}
-        </label>
+            {fav >= 0 ? (
+                <button
+                    onClick={() => ctl.deleteFavorite(fav)}
+                    title="Delete this favorite (the track keeps the sound)"
+                    className="rounded px-1 text-orange-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                >
+                    ★×
+                </button>
+            ) : (
+                <button
+                    onClick={() => ctl.saveFavorite(i)}
+                    title="Save this sound as a favorite (STAR on the device)"
+                    className="rounded px-1 text-zinc-400 hover:bg-zinc-100 hover:text-orange-500 dark:hover:bg-zinc-800"
+                >
+                    ☆
+                </button>
+            )}
+        </span>
     );
 }
 

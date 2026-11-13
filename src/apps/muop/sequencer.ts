@@ -1,7 +1,7 @@
 // μOp sequencer: plays the song's pattern chain on the clock, records live hits quantized to the nearest step.
 import { Clock } from '../../engine/clock';
 import { toAudioTime } from '../../engine/audio';
-import { DRUMS, STEPS, type FxHit, type Song } from './model';
+import { DRUMS, MAX_LENGTH, STEPS, type FxHit, type Song } from './model';
 import { chordAt, harmonyTrack, trackMidis } from './harmony';
 import { FX, TrackFx } from './fx';
 import type { MasterFxId } from '../../engine/fx';
@@ -22,6 +22,13 @@ export interface PlayedStep {
 
 /** The track's step counter (own rate) at song position `tick` (clock steps). */
 const trackPos = (tick: number, rate: number) => Math.floor(tick * rate + 1e-9);
+
+/** How long a note plays, in steps: its length, cut where the next note starts (mono style, wraps at the track length). */
+export function soundingLength(notes: (number | null)[], lengths: number[], step: number, trackLength: number): number {
+    const length = lengths[step] ?? 1;
+    for (let j = 1; j < length; j++) if (notes[(step + j) % trackLength] !== null) return j;
+    return length;
+}
 
 /** Adds an FX hit to a step's list, once. */
 function addFx(hits: FxHit[], hit: FxHit): void {
@@ -151,8 +158,19 @@ export class Sequencer {
         this.onEdit(pattern);
         const t = this.song.patterns[pattern].tracks[target.track];
         if (target.sound !== undefined) t.drums[target.sound][step] = value;
-        else t.notes[step] = value;
+        else {
+            t.notes[step] = value;
+            t.lengths[step] = 1; // recordLength() sets it on release
+        }
         return { pattern, step };
+    }
+
+    /** Sets the length of a recorded note from how long its pad was held (ms). */
+    recordLength(track: number, at: { pattern: number; step: number }, heldMs: number): number {
+        const t = this.song.tracks[track];
+        const length = Math.min(MAX_LENGTH, t.length, Math.max(1, Math.round((heldMs * t.rate) / this.clock.stepDuration)));
+        this.song.patterns[at.pattern].tracks[track].lengths[at.step] = length;
+        return length;
     }
 
     private play(index: number, time: number, duration: number): void {
@@ -189,7 +207,9 @@ export class Sequencer {
                 const steps = this.song.patterns[src.pattern].tracks[i];
                 const t0 = t + (k / track.rate - tick) * (duration / 1000);
                 const at = (h: number) => t0 + (h * stepMs) / 1000 / src.hits;
-                const hitLength = (stepMs * 0.85) / 1000 / src.hits;
+                // a note lasts its length in steps (ratchets: short hits)
+                const gate = src.hits > 1 ? 0.85 / src.hits : soundingLength(steps.notes, steps.lengths, src.step, track.length) - 0.15;
+                const hitLength = (stepMs * gate) / 1000;
                 if (track.kind === 'drums') {
                     for (let sound = 0; sound < DRUMS; sound++) {
                         const v = steps.drums[sound][src.step];
