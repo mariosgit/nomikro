@@ -62,6 +62,7 @@ m.lights.removeLayer('grid');               // removeLayer() = all layers
 ```ts
 m.screen.set('Hello\nWorld');    // 2 lines, optional font size: set(text, 14)
 m.screen.blankAfter = 0;         // default: blank 3 s after the last set(); 0 = keep
+m.screen.hold(true);             // no blanking while a button is held; hold(false) restarts the countdown
 m.screen.clear();
 ```
 

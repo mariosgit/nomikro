@@ -15,6 +15,7 @@ export class Screen {
     /** Blank the display this long after the last set(); 0 = keep it. */
     blankAfter = 3000;
     private blanktimer: number | null = null;
+    private held = false;
 
     // Single writer: one frame in flight, only the latest pending frame is kept.
     private sent: Uint8Array | null = null;
@@ -25,17 +26,31 @@ export class Screen {
 
     set(text: string, size: number = 14): Promise<void> {
         const done = this.show(this.getBuffer(this.getBitImg(text, size)));
+        this.armBlank();
+        return done;
+    }
 
+    /**
+     * Keep the text up while `on` (e.g. while a button or pad is held): no blanking.
+     * Back to `false` starts the blank countdown (`blankAfter`) from then.
+     */
+    hold(on: boolean): void {
+        if (on === this.held) return;
+        this.held = on;
+        this.armBlank();
+    }
+
+    private armBlank(): void {
         if (this.blanktimer) {
             window.clearTimeout(this.blanktimer);
             this.blanktimer = null;
         }
-        if (this.blankAfter > 0) {
+        if (this.blankAfter > 0 && !this.held) {
             this.blanktimer = window.setTimeout(() => {
+                this.blanktimer = null;
                 this.clear();
             }, this.blankAfter);
         }
-        return done;
     }
 
     clear(): Promise<void> {

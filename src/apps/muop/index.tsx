@@ -12,6 +12,9 @@ import { FX } from './fx';
 /** Pad numbers in screen order: top row first. Pad 0 = bottom left. */
 const PADS_TOP_DOWN = [12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3];
 
+/** Cheat sheet, generated from the controller's pages (same data as the device lights / display). */
+const CONTROLS = MuOpController.controls();
+
 const CSS: Record<Color, string> = {
     off: 'transparent', red: '#ef4444', orange: '#f97316', orange_light: '#fdba74', yellow_warm: '#fbbf24', yellow: '#facc15',
     lime: '#a3e635', green: '#22c55e', mint: '#6ee7b7', cyan: '#22d3ee', turquoise: '#2dd4bf', blue: '#3b82f6', plum: '#c084fc',
@@ -139,24 +142,9 @@ function MuOp({ maschine }: AppProps) {
             <section className="rounded-xl border border-zinc-200 bg-white p-5 text-sm shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
                 <h2 className="mb-2 font-semibold">Controls</h2>
                 <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
-                    <Help k="SELECT + pad" v="Select track 1–16 (pads show the tracks while SELECT is held). Everything below acts on the selected track" />
-                    <Help k="PAD MODE / KEYBOARD / CHORDS" v="Shortcuts: drums track · bass ↔ lead · chords track" />
-                    <Help k="Pads" v="Play. Drums: pads 1–8 (selects the sound). Bass / lead: A minor scale over 16 pads. Chords: pads 1–8 triads (Am B° C Dm Em F G Am), 9–16 the same as 7th chords" />
-                    <Help k="STEP" v="Pads = 16 steps. Drums: tap toggles the selected sound. Notes / chords: tap writes the last played note / chord, tap again clears, hold + encoder changes it" />
-                    <Help k="PLAY / STOP / REC" v="Play/pause · stop and rewind · live recording into the nearest step while playing" />
-                    <Help k="PATTERN + pad" v="Select pattern (switches at the end of the bar while playing). Tap several pads while holding = chain" />
-                    <Help k="DUPLICATE + pad" v="Copy the current pattern there" />
-                    <Help k="ERASE + pad" v="Clear that drum sound (notes / chords track: clear the track in this pattern)" />
-                    <Help k="TEMPO / SWING + encoder" v="Tempo, swing 50–75 %" />
-                    <Help k="VOLUME + encoder" v="Volume of the current track (saved in the song). SHIFT + VOLUME + encoder: master volume" />
-                    <Help k="Touch strip" v="Low-pass filter while touched" />
-                    <Help k="SHIFT + TAP" v="Metronome on/off (TAP blinks on the beat while on)" />
-                    <Help k="SEARCH" v="Next sound for the current track (SHIFT + SEARCH: previous; also selectable in the track list)" />
-                    <Help k="STAR" v="Random variation of the current track's sound: temporary, not saved (STAR lit while active, SEARCH or a reload goes back)" />
-                    <Help k="PERFORM + pad" v="Punch-in FX while held (pads show the FX, active = white). Pads 1–8 act on the selected track, 9–16 on the whole mix. Release PERFORM first to keep it until the pad is let go. PERFORM lit while an FX runs" />
-                    <Help k="REC + PERFORM + pad" v="While playing: the FX is recorded into the pattern's steps and comes back every loop" />
-                    <Help k="ERASE + PERFORM" v="Clear all recorded FX of the current pattern (ERASE + PERFORM + pad: only that FX)" />
-                    <Help k="Button lights" v="Dim = usable, bright = active / held" />
+                    {CONTROLS.map((h) => (
+                        <Help key={h.keys} k={h.keys} v={h.text} />
+                    ))}
                 </dl>
                 <h3 className="mt-4 mb-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">PERFORM pads (as on the device)</h3>
                 <div className="grid max-w-md grid-cols-4 gap-1.5">

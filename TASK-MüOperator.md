@@ -102,8 +102,9 @@ Do this refactor first, then move the existing modifiers onto it (PERFORM, SELEC
   are shortcuts. Chords: pads 1–8 diatonic triads, 9–16 seventh chords (A minor). v1 songs migrate (drums → T1, melody → T4).
 
 ### 1. Page framework
-- [ ] `Page` abstraction + controller refactor (see the concept above), cheat sheet generated from the pages.
-- [ ] Move PERFORM, SELECT, PATTERN, DUPLICATE, ERASE, TEMPO / SWING / VOLUME onto it; behaviour stays the same.
+- [x] `Page` abstraction + controller refactor (`src/apps/muop/page.ts`), cheat sheet generated from the pages.
+  Display stays on while a page button / step is held (`screen.hold()`), blanks 3 s after release.
+- [x] Move PERFORM, SELECT, PATTERN, DUPLICATE, ERASE, TEMPO / SWING / VOLUME onto it (VOLUME: `< >` track / master).
 
 ### 2. SHIFT
 - [ ] SHIFT + pad = the functions printed on the pads:

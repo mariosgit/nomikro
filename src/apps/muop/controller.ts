@@ -1,7 +1,7 @@
 // μOp controller: device input → song edits / playback, song state → pad + button lights + display.
 // The page reads `view` (subscribe()); the device is the main instrument.
 // Everything (pads, STEP, REC, ERASE, SEARCH, STAR, VOLUME) acts on the selected track (SELECT + pad).
-import { STRIP_LEDS, STRIP_MAX, type Color, type InputEvent, type LedButton, type MaschineMikroMk3 } from '../../maschine';
+import { LED_BUTTONS, STRIP_LEDS, STRIP_MAX, type Color, type InputEvent, type LedButton, type MaschineMikroMk3 } from '../../maschine';
 import {
     CHORDS,
     DRUMS,
@@ -26,11 +26,9 @@ import { devlog } from '../../dev/devlog';
 import { Metronome } from '../../engine/metronome';
 import { DRUM_SOUNDS, soundsFor, type Sounds } from './sounds';
 import { findInstrument, nextInstrument, type Voice } from '../../engine/instruments';
+import { Pages, type Cell, type Help, type Page } from './page';
 
-export interface Cell {
-    color: Color;
-    level: number;
-}
+export type { Cell, Help } from './page';
 
 export interface TrackView {
     name: string;
@@ -72,18 +70,35 @@ export interface MuOpView {
 type Layer = ReturnType<MaschineMikroMk3['lights']['layer']>;
 
 const OFF: Cell = { color: 'off', level: 0 };
-const MODIFIERS: LedButton[] = ['select', 'pattern', 'duplicate', 'erase', 'tempo', 'swing', 'volume'];
 const NOTE_COLORS: Color[] = ['orange', 'yellow', 'lime', 'green', 'cyan', 'blue', 'violet'];
 export const noteColor = (degree: number): Color => NOTE_COLORS[((degree % 7) + 7) % 7];
 /** Track color by kind (bass = notes an octave down: blue). */
 export const trackColor = (t: Pick<Track, 'kind' | 'octave'>): Color =>
     t.kind === 'drums' ? 'red' : t.kind === 'chords' ? 'violet' : t.kind === 'notes' ? (t.octave < 0 ? 'blue' : 'green') : 'off';
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+const pct = (v: number) => String(Math.round(v * 100));
+
+/** Cheat sheet rows that aren't pages (before / after the generated page rows). */
+const HELP_TOP: Help[] = [
+    { keys: 'Hold a lit button', text: 'Its page while held: pads / encoder / < > that do something are lit, the display shows the value. Release = back to playing' },
+    { keys: 'PAD MODE / KEYBOARD / CHORDS', text: 'Shortcuts: drums track · bass ↔ lead · chords track' },
+    { keys: 'Pads', text: 'Play. Drums: pads 1–8 (selects the sound). Bass / lead: A minor scale over 16 pads. Chords: pads 1–8 triads (Am B° C Dm Em F G Am), 9–16 the same as 7th chords' },
+    { keys: 'STEP', text: 'Pads = 16 steps. Drums: tap toggles the selected sound. Notes / chords: tap writes the last played note / chord, tap again clears, hold + encoder changes it' },
+    { keys: 'PLAY / STOP / REC', text: 'Play/pause · stop and rewind · live recording into the nearest step while playing' },
+];
+const HELP_BOTTOM: Help[] = [
+    { keys: 'Touch strip', text: 'Low-pass filter while touched' },
+    { keys: 'SHIFT + TAP', text: 'Metronome on/off (TAP blinks on the beat while on)' },
+    { keys: 'SEARCH', text: 'Next sound for the current track (SHIFT + SEARCH: previous; also selectable in the track list)' },
+    { keys: 'STAR', text: "Random variation of the current track's sound: temporary, not saved (STAR lit while active, SEARCH or a reload goes back)" },
+    { keys: 'Button lights', text: 'Dim = usable, bright = active / held. While a page is held, only what it uses stays lit' },
+];
 
 export class MuOpController {
     view: MuOpView;
 
     private seq: Sequencer;
+    private pages: Pages;
     private metronome = new Metronome();
     private grid: Layer;
     private playhead: Layer;
@@ -117,6 +132,7 @@ export class MuOpController {
         private sounds: Sounds,
     ) {
         this.seq = new Sequencer(song, sounds);
+        this.pages = new Pages(MuOpController.definePages(this), (text) => this.say(text));
         this.grid = m.lights.layer('grid');
         this.playhead = m.lights.layer('playhead');
         this.flashLayer = m.lights.layer('flash');
@@ -137,7 +153,7 @@ export class MuOpController {
             this.seq.clock.at(s.time, () => {
                 this.step = s.step;
                 this.stepFx = s.fx;
-                if (!this.stepMode && !this.trackView() && !this.modifierView() && !this.fxView()) {
+                if (!this.stepMode && !this.pages.active?.cells) {
                     for (const pad of s.pads[this.track]) if (pad >= 0 && pad < 16) this.flash(pad, this.padColor(pad));
                 }
                 this.update();
@@ -206,15 +222,199 @@ export class MuOpController {
         return () => this.listeners.delete(listener);
     }
 
+    /** The Controls cheat sheet (no device needed). */
+    static controls(): Help[] {
+        const pages = new Pages(MuOpController.definePages(null as unknown as MuOpController), () => {});
+        return [...HELP_TOP, ...pages.help(), ...HELP_BOTTOM];
+    }
+
+    // --- pages (hold a button) ---
+
+    /**
+     * The pages. `c` is only used inside the callbacks (never while building), so `controls()` can build them
+     * without a controller for the cheat sheet.
+     */
+    private static definePages(c: MuOpController): Page[] {
+        const held = (b: LedButton) => c.m.input.isHeld(b);
+
+        const select: Page = {
+            button: 'select',
+            name: 'Select track',
+            hint: 'pad = track',
+            cells: () => c.song.tracks.map((t, i) => (i === c.track ? { color: 'white', level: 3 } : t.kind ? { color: trackColor(t), level: 1 } : OFF)),
+            padDown: (pad) => c.selectTrack(pad),
+            help: [{ keys: 'SELECT + pad', text: 'Select track 1–16 (pads show the tracks, selected = white). Everything else acts on the selected track' }],
+        };
+
+        const pattern: Page = {
+            button: 'pattern',
+            name: 'Pattern',
+            hint: 'pad = select, more = chain',
+            open: () => {
+                c.tapChain = [];
+            },
+            close: () => {
+                if (c.tapChain.length > 1) c.say(`Chain ${c.tapChain.map((p) => p + 1).join(' ')}`);
+            },
+            cells: () => c.patternCells(),
+            padDown: (pad) => {
+                c.tapChain.push(pad);
+                c.seq.setChain(c.tapChain);
+                const when = c.seq.playing ? ' (next)' : '';
+                c.say(c.tapChain.length === 1 ? `Pattern ${pad + 1}${when}` : `Chain ${c.tapChain.map((p) => p + 1).join(' ')}${when}`);
+            },
+            help: [
+                {
+                    keys: 'PATTERN + pad',
+                    text: 'Select pattern (switches at the end of the bar while playing). Tap several pads while holding = chain. Pads: current = white, in the chain = green, used = blue',
+                },
+            ],
+        };
+
+        const duplicate: Page = {
+            button: 'duplicate',
+            name: 'Duplicate',
+            hint: 'pad = copy pattern to',
+            cells: () => c.patternCells(),
+            padDown: (pad) => {
+                c.song.patterns[pad] = clonePattern(c.song.patterns[c.seq.pattern]);
+                c.saveSoon();
+                c.say(`Copy ${c.seq.pattern + 1} > ${pad + 1}`);
+            },
+            help: [{ keys: 'DUPLICATE + pad', text: 'Copy the current pattern there' }],
+        };
+
+        const erase: Page = {
+            button: 'erase',
+            name: 'Erase',
+            hint: 'pad = clear',
+            modifier: true,
+            buttons: ['perform'],
+            cells: () => {
+                const steps = c.song.patterns[c.seq.pattern].tracks[c.track];
+                if (c.cur.kind !== 'drums') return c.playCells();
+                return Array.from({ length: 16 }, (_, i) => (i < DRUMS && steps.drums[i].some((v) => v > 0) ? { color: DRUM_SOUNDS[i].color, level: 1 } : OFF));
+            },
+            padDown: (pad) => {
+                const kind = c.cur.kind;
+                const steps = c.song.patterns[c.seq.pattern].tracks[c.track];
+                if (!kind) return;
+                if (kind !== 'drums') {
+                    steps.notes.fill(null);
+                    c.say(`Erase\n${c.label(c.track)}`);
+                } else if (pad < DRUMS) {
+                    steps.drums[pad].fill(0);
+                    c.say(`Erase ${DRUM_SOUNDS[pad].name}`);
+                }
+                c.saveSoon();
+            },
+            help: [{ keys: 'ERASE + pad', text: 'Clear that drum sound (pads show the used ones). Notes / chords track: any pad clears the track in this pattern' }],
+        };
+
+        const tempo: Page = {
+            button: 'tempo',
+            name: 'Tempo',
+            params: [
+                {
+                    name: 'Tempo',
+                    help: 'Tempo 40–240 BPM',
+                    value: () => `${c.song.bpm} BPM`,
+                    step: (d) => {
+                        c.song.bpm = clamp(c.song.bpm + d, 40, 240);
+                        c.seq.clock.bpm = c.song.bpm;
+                        c.saveSoon();
+                    },
+                },
+            ],
+        };
+
+        const swing: Page = {
+            button: 'swing',
+            name: 'Swing',
+            params: [
+                {
+                    name: 'Swing',
+                    help: 'Swing 50–75 %',
+                    value: () => `${c.song.swing}%`,
+                    step: (d) => {
+                        c.song.swing = clamp(c.song.swing + d, 50, 75);
+                        c.seq.clock.swing = c.song.swing;
+                        c.saveSoon();
+                    },
+                },
+            ],
+        };
+
+        const volume: Page = {
+            button: 'volume',
+            name: 'Volume',
+            buttons: ['shift'],
+            // SHIFT + VOLUME starts on the master volume
+            open: () => (held('shift') ? 1 : 0),
+            params: [
+                {
+                    name: 'Track',
+                    help: 'Volume of the current track (saved in the song)',
+                    value: () => (c.cur.kind ? `${pct(c.cur.level)}  T${c.track + 1}` : '–'),
+                    step: (d) => {
+                        const t = c.cur;
+                        if (!t.kind) return;
+                        t.level = clamp(Math.round((t.level + d * 0.02) * 100) / 100, 0, 1.5);
+                        c.sounds.setLevel(c.track, t.level);
+                        c.saveSoon();
+                    },
+                },
+                {
+                    name: 'Master',
+                    help: 'master volume (SHIFT + VOLUME starts here)',
+                    value: () => pct(c.song.volume),
+                    step: (d) => {
+                        c.song.volume = clamp(Math.round((c.song.volume + d * 0.02) * 100) / 100, 0, 1);
+                        c.sounds.volume = c.song.volume;
+                        c.saveSoon();
+                    },
+                },
+            ],
+        };
+
+        const perform: Page = {
+            button: 'perform',
+            name: 'Perform FX',
+            hint: 'pad = FX',
+            buttons: ['erase', 'rec'],
+            open: () => {
+                if (!held('erase')) return;
+                for (const hits of c.song.patterns[c.seq.pattern].fx) hits.length = 0;
+                c.saveSoon();
+                c.say(`Erase FX\npattern ${c.seq.pattern + 1}`);
+            },
+            cells: () => {
+                const active = c.activeFx();
+                return FX.map((def, i) =>
+                    active.some((h) => h.fx === i && (h.track === undefined || h.track === c.track)) ? { color: 'white', level: 3 } : { color: def.color, level: 1 },
+                );
+            },
+            padDown: (pad) => c.fxDown(pad),
+            help: [
+                {
+                    keys: 'PERFORM + pad',
+                    text: 'Punch-in FX while held (pads show the FX, active = white). Pads 1–8 act on the selected track, 9–16 on the whole mix. Release PERFORM first to keep it until the pad is let go. PERFORM lit while an FX runs',
+                },
+                { keys: 'REC + PERFORM + pad', text: "While playing: the FX is recorded into the pattern's steps and comes back every loop" },
+                { keys: 'ERASE + PERFORM', text: 'Clear all recorded FX of the current pattern (ERASE + PERFORM + pad: only that FX)' },
+            ],
+        };
+
+        return [select, pattern, duplicate, erase, perform, tempo, swing, volume];
+    }
+
     // --- input ---
 
     private handle(e: InputEvent): void {
+        if (this.pages.handle(e)) return this.update();
         switch (e.type) {
             case 'buttonDown':
                 this.buttonDown(e.button);
-                break;
-            case 'buttonUp':
-                if (e.button === 'pattern' && this.tapChain.length > 1) this.say(`Chain ${this.tapChain.map((p) => p + 1).join(' ')}`);
                 break;
             case 'padDown':
                 this.padDown(e.pad, e.velocity, e.time);
@@ -270,20 +470,10 @@ export class MuOpController {
                 seq.stop();
                 this.step = -1;
                 return this.say('Stop');
-            case 'perform':
-                if (this.m.input.isHeld('erase')) {
-                    for (const hits of this.song.patterns[seq.pattern].fx) hits.length = 0;
-                    this.saveSoon();
-                    return this.say(`Erase FX\npattern ${seq.pattern + 1}`);
-                }
-                return;
             case 'rec':
                 this.recording = !this.recording;
                 seq.recordFx = this.recording;
                 return this.say(this.recording ? 'Record' : 'Record off');
-            case 'pattern':
-                this.tapChain = [];
-                return;
         }
     }
 
@@ -292,36 +482,11 @@ export class MuOpController {
         if (i >= 0) this.selectTrack(i);
     }
 
+    /** Pads when no page took them: play, or steps in STEP mode. */
     private padDown(pad: number, velocity: number, time: number): void {
-        const input = this.m.input;
-        const pattern = this.song.patterns[this.seq.pattern];
-        const steps = pattern.tracks[this.track];
+        const steps = this.song.patterns[this.seq.pattern].tracks[this.track];
         const kind = this.cur.kind;
-
-        if (input.isHeld('select')) return this.selectTrack(pad);
-        if (input.isHeld('pattern')) {
-            this.tapChain.push(pad);
-            this.seq.setChain(this.tapChain);
-            const when = this.seq.playing ? ' (next)' : '';
-            return this.say(this.tapChain.length === 1 ? `Pattern ${pad + 1}${when}` : `Chain ${this.tapChain.map((p) => p + 1).join(' ')}${when}`);
-        }
-        if (input.isHeld('duplicate')) {
-            this.song.patterns[pad] = clonePattern(pattern);
-            this.saveSoon();
-            return this.say(`Copy ${this.seq.pattern + 1} > ${pad + 1}`);
-        }
-        if (input.isHeld('perform')) return this.fxDown(pad);
         if (!kind) return;
-        if (input.isHeld('erase')) {
-            if (kind !== 'drums') {
-                steps.notes.fill(null);
-                this.say(`Erase\n${this.label(this.track)}`);
-            } else if (pad < DRUMS) {
-                steps.drums[pad].fill(0);
-                this.say(`Erase ${DRUM_SOUNDS[pad].name}`);
-            }
-            return this.saveSoon();
-        }
 
         const now = this.sounds.ctx.currentTime;
         if (this.stepMode) {
@@ -333,8 +498,10 @@ export class MuOpController {
                 steps.notes[pad] = this.pens[this.track];
                 this.preview(this.pens[this.track]);
                 this.heldStep = { pad, created: true, edited: false };
+                this.say(`Step ${pad + 1}\n${this.valueName(this.pens[this.track])}`);
             } else {
                 this.heldStep = { pad, created: false, edited: false };
+                this.say(`Step ${pad + 1}\n${this.valueName(steps.notes[pad]!)}`);
             }
             return this.saveSoon();
         }
@@ -397,40 +564,24 @@ export class MuOpController {
             if (!held.created && !held.edited) {
                 this.song.patterns[this.seq.pattern].tracks[this.track].notes[pad] = null;
                 this.saveSoon();
+                this.say(`Step ${pad + 1}\ncleared`);
             }
             this.heldStep = null;
         }
     }
 
+    /** Encoder when no page took it: edits the held step (STEP mode, notes / chords). */
     private encoder(delta: number): void {
-        const input = this.m.input;
-        const song = this.song;
         const t = this.cur;
-        if (input.isHeld('tempo')) {
-            song.bpm = clamp(song.bpm + delta, 40, 240);
-            this.seq.clock.bpm = song.bpm;
-            this.say(`${song.bpm} BPM`);
-        } else if (input.isHeld('swing')) {
-            song.swing = clamp(song.swing + delta, 50, 75);
-            this.seq.clock.swing = song.swing;
-            this.say(`Swing ${song.swing}%`);
-        } else if (input.isHeld('volume') && input.isHeld('shift')) {
-            song.volume = clamp(Math.round((song.volume + delta * 0.02) * 100) / 100, 0, 1);
-            this.sounds.volume = song.volume;
-            this.say(`Master volume ${Math.round(song.volume * 100)}`);
-        } else if (input.isHeld('volume') && t.kind) {
-            t.level = clamp(Math.round((t.level + delta * 0.02) * 100) / 100, 0, 1.5);
-            this.sounds.setLevel(this.track, t.level);
-            this.say(`${this.label(this.track)}\nvolume ${Math.round(t.level * 100)}`);
-        } else if (this.heldStep && t.kind && t.kind !== 'drums') {
-            const notes = song.patterns[this.seq.pattern].tracks[this.track].notes;
+        if (this.heldStep && t.kind && t.kind !== 'drums') {
+            const notes = this.song.patterns[this.seq.pattern].tracks[this.track].notes;
             const [lo, hi] = t.kind === 'chords' ? [0, CHORDS - 1] : [MIN_DEGREE, MAX_DEGREE];
             const value = clamp((notes[this.heldStep.pad] ?? this.pens[this.track]) + delta, lo, hi);
             notes[this.heldStep.pad] = value;
             this.pens[this.track] = value;
             this.heldStep.edited = true;
             this.preview(value);
-            this.say(this.valueName(value));
+            this.say(`Step ${this.heldStep.pad + 1}\n${this.valueName(value)}`);
         } else {
             return;
         }
@@ -460,26 +611,11 @@ export class MuOpController {
 
     // --- output ---
 
-    /** PATTERN / DUPLICATE held: the pads show the patterns. */
-    private modifierView(): boolean {
-        return this.m.input.isHeld('pattern') || this.m.input.isHeld('duplicate');
-    }
-
-    /** PERFORM held: the pads show the FX. */
-    private fxView(): boolean {
-        return this.m.input.isHeld('perform');
-    }
-
     /** FX running now: held pads + recorded on the current step (while playing). */
     private activeFx(): FxHit[] {
         const live = [...this.fxPads.values()];
         const recorded = this.seq.playing ? this.stepFx.filter((h) => !live.some((l) => l.fx === h.fx && l.track === h.track)) : [];
         return [...live, ...recorded];
-    }
-
-    /** SELECT held: the pads show the tracks. */
-    private trackView(): boolean {
-        return this.m.input.isHeld('select');
     }
 
     /** Color of a pad when played on the current track. */
@@ -488,35 +624,29 @@ export class MuOpController {
         return kind === 'drums' ? DRUM_SOUNDS[pad]?.color ?? 'white' : kind === 'chords' ? noteColor(chordRoot(pad)) : noteColor(pad);
     }
 
+    /** What the pads show: the held page's view, else the play / step view. */
     private cells(): Cell[] {
-        const song = this.song;
-        const steps = song.patterns[this.seq.pattern].tracks[this.track];
-        const input = this.m.input;
+        return this.pages.active?.cells?.() ?? this.playCells();
+    }
+
+    /** PATTERN / DUPLICATE: current = white, in the chain = green, used = blue. */
+    private patternCells(): Cell[] {
+        const chain = this.seq.pendingChain ?? this.song.chain;
+        return this.song.patterns.map((p, i) =>
+            i === this.seq.pattern ? { color: 'white', level: 3 }
+            : chain.includes(i) ? { color: 'green', level: 2 }
+            : !isEmptyPattern(p) ? { color: 'blue', level: 1 }
+            : OFF,
+        );
+    }
+
+    /** Play view (sounds / notes / chords) or the steps in STEP mode. */
+    private playCells(): Cell[] {
+        const steps = this.song.patterns[this.seq.pattern].tracks[this.track];
         const kind = this.cur.kind;
         const all = (f: (i: number) => Cell) => Array.from({ length: 16 }, (_, i) => f(i));
 
-        if (this.fxView()) {
-            const active = this.activeFx();
-            return FX.map((def, i) =>
-                active.some((h) => h.fx === i && (h.track === undefined || h.track === this.track)) ? { color: 'white', level: 3 } : { color: def.color, level: 1 },
-            );
-        }
-        if (this.trackView()) {
-            return song.tracks.map((t, i) => (i === this.track ? { color: 'white', level: 3 } : t.kind ? { color: trackColor(t), level: 1 } : OFF));
-        }
-        if (this.modifierView()) {
-            const chain = this.seq.pendingChain ?? song.chain;
-            return song.patterns.map((p, i) =>
-                i === this.seq.pattern ? { color: 'white', level: 3 }
-                : chain.includes(i) ? { color: 'green', level: 2 }
-                : !isEmptyPattern(p) ? { color: 'blue', level: 1 }
-                : OFF,
-            );
-        }
         if (!kind) return all(() => OFF);
-        if (input.isHeld('erase') && kind === 'drums') {
-            return all((i) => (i < DRUMS && steps.drums[i].some((v) => v > 0) ? { color: DRUM_SOUNDS[i].color, level: 1 } : OFF));
-        }
         if (this.stepMode) {
             return all((s): Cell => {
                 if (kind === 'drums') {
@@ -541,25 +671,31 @@ export class MuOpController {
         cells.forEach((c, i) => this.grid.pad(i, c.color, c.level));
 
         this.playhead.clear();
-        const showHead = this.stepMode && this.seq.playing && this.step >= 0 && !this.modifierView() && !this.trackView() && !this.fxView();
+        const showHead = this.stepMode && this.seq.playing && this.step >= 0 && !this.pages.active?.cells;
         if (showHead) this.playhead.pad(this.step, 'white', 3);
+        // the display stays on while a page button or a step is held, blanks 3 s after release
+        this.m.screen.hold(!!this.pages.active || !!this.heldStep);
 
+        // 1 = usable, more = a state; page buttons and the held page's view are applied by `pages.lights()`
         const input = this.m.input;
         const kind = this.cur.kind;
         const beat = this.seq.playing && this.step % 4 === 0;
-        l.button('pad_mode', kind === 'drums' ? 4 : 1);
-        l.button('keyboard', kind === 'notes' ? 4 : 1);
-        l.button('chords', kind === 'chords' ? 4 : 1);
-        l.button('step', this.stepMode ? 4 : 1);
-        l.button('play', this.seq.playing ? (beat ? 4 : 2) : 1);
-        l.button('rec', this.recording ? 4 : 1);
-        l.button('stop', 1);
-        l.button('shift', input.isHeld('shift') ? 4 : 1);
-        l.button('tap', this.metronome.enabled ? (beat ? 4 : 2) : 1);
-        l.button('search', input.isHeld('search') ? 4 : 1);
-        l.button('star', this.sounds.isRandom(this.track) ? 3 : input.isHeld('star') ? 4 : 1);
-        for (const b of MODIFIERS) l.button(b, input.isHeld(b) ? 4 : 1);
-        l.button('perform', input.isHeld('perform') ? 4 : this.activeFx().length ? 3 : 1);
+        const levels = new Map<LedButton, number>([
+            ['pad_mode', kind === 'drums' ? 4 : 1],
+            ['keyboard', kind === 'notes' ? 4 : 1],
+            ['chords', kind === 'chords' ? 4 : 1],
+            ['step', this.stepMode ? 4 : 1],
+            ['play', this.seq.playing ? (beat ? 4 : 2) : 1],
+            ['rec', this.recording ? 4 : 1],
+            ['stop', 1],
+            ['shift', input.isHeld('shift') ? 4 : 1],
+            ['tap', this.metronome.enabled ? (beat ? 4 : 2) : 1],
+            ['search', input.isHeld('search') ? 4 : 1],
+            ['star', this.sounds.isRandom(this.track) ? 3 : input.isHeld('star') ? 4 : 1],
+            ['perform', this.activeFx().length ? 3 : 1],
+        ]);
+        const lit = this.pages.lights(levels, (b) => input.isHeld(b));
+        for (const b of LED_BUTTONS) l.button(b, lit.get(b) ?? 0);
         l.flush();
 
         if (showHead) cells[this.step] = { color: 'white', level: 3 };

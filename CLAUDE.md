@@ -29,7 +29,8 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
   - `starter/` template for a new app (copy it)
   - `muop/` μOp, PO-style groovebox, 16 tracks (kinds drums / notes / chords), SELECT + pad selects (`model.ts` song data,
     chords, v1 → v2 migration, localStorage, `sounds.ts` mixer: instrument per track + strip filter + FX bus + volume,
-    `sequencer.ts` chain playback + quantized recording + punch-in FX, `fx.ts` PERFORM FX table + track step remapping, `controller.ts` input mapping / lights / display, `index.tsx` page).
+    `sequencer.ts` chain playback + quantized recording + punch-in FX, `fx.ts` PERFORM FX table + track step remapping, `page.ts` hold-a-button pages (`Pages`: routing of pads / `< >` / encoder / strip,
+    button lights, display, generated cheat sheet), `controller.ts` input mapping / lights / display + the page definitions, `index.tsx` page).
     Display messages go to the dev log (`event` with `app: 'muop'`).
 - `src/engine/` framework-free music engine: `clock.ts` (lookahead scheduler, worker tick, timebase performance.now() ms,
   `onStep` → `{index, time, duration}`, `at(time, fn)` for lights), `audio.ts` (shared AudioContext, `toAudioTime()`,
