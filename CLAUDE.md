@@ -34,7 +34,7 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
     Display messages go to the dev log (`event` with `app: 'muop'`).
 - `src/engine/` framework-free music engine: `clock.ts` (lookahead scheduler, worker tick, timebase performance.now() ms,
   `onStep` → `{index, time, duration}`, `at(time, fn)` for lights), `audio.ts` (shared AudioContext, `toAudioTime()`,
-  unlocked on the first click on the page: pad presses don't count as a user gesture), `metronome.ts`, `fx.ts` (master FX bus for punch-ins: sweeps, gate, pump, echo, reverb, crush, tape stop),
+  unlocked on the first click on the page: pad presses don't count as a user gesture), `metronome.ts`, `midi.ts` (Web MIDI out: ports, timed notes; access requested on demand), `fx.ts` (master FX bus for punch-ins: sweeps, gate, pump, echo, reverb, crush, tape stop),
   `instruments/` (sound engines, chosen per track by id: `types.ts` `DrumKit` / `Melodic` contract + `DRUM_ROLES`,
   `basic.ts` plain Web Audio, `tone.ts` Tone.js on our AudioContext, loaded on demand; registry `DRUM_KITS` / `MELODIC` in `index.ts`)
 - `src/dev/devlog.ts` dev-only logging to the dev server

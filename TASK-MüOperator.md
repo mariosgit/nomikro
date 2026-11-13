@@ -65,7 +65,7 @@ Do this refactor first, then move the existing modifiers onto it (PERFORM, SELEC
 
 | Page (hold) | Pads | `< >` + encoder | Strip | Push / short press |
 |---|---|---|---|---|
-| SELECT | tracks (select) | track settings: kind, sound, octave, name, clock ×/÷, pattern length, harmony mode (free / transpose / follow), MIDI out | – | – |
+| SELECT | tracks (select) | track settings: kind, octave, clock ×/÷, length, later harmony mode (name, MIDI out: app page) | – | – |
 | PATTERN | patterns (select / chain) | – | – | – |
 | PERFORM | FX 1–8 track, 9–16 mix | FX settings (later) | FX amount (sweep position, echo feedback) | – |
 | CHORDS (hold) | 12 roots + 4 scales | scale, voicing, inversion, octave | – | – |
@@ -123,13 +123,19 @@ Do this refactor first, then move the existing modifiers onto it (PERFORM, SELEC
 - Later (needs features we don't have yet), see "Later: SHIFT functions" below.
 
 ### 3. SELECT page (track settings)
-- [ ] Fill empty tracks 5–16: kind + sound.
-- [ ] Track name, octave.
-- [ ] Clock multiplier / divider per track (Performer: per-track divisor): ×2, ×1, ÷2, ÷4, ÷16 steps per clock step.
-  Drums: double-time hats, half-time patterns. Chords at ÷4 / ÷16 = one chord per beat / bar.
-- [ ] Pattern length per track (polymeter).
-- [ ] Harmony mode per notes track: free / transpose / follow (see the harmony concept).
-- [ ] MIDI out per track (channel), later as an "instrument".
+Device: hold SELECT, pad = track, `< >` + encoder = setting of the selected track. App page: the track list (all 16
+tracks) has the same settings plus the ones that are only set there (name, MIDI out).
+- [x] Kind (empty / drums / notes / chords). Selecting an empty track makes it a notes track; a new track starts
+  with a random sound. PAD MODE / KEYBOARD / CHORDS stay shortcuts to the tracks. Steps are kept when the
+  kind changes (drums and notes are stored separately).
+- [x] Octave (−3..+3, notes / chords).
+- [x] Clock per track (Performer-style divisor): ÷16 ÷8 ÷4 ÷2 ×1 ×2 steps per 16th. The sequencer counts a song
+  position (`tick`), each track derives its own step from it; track FX and live recording work in the track's steps.
+- [x] Length per track 1–16 steps (polymeter); STEP view hides the steps beyond it, nudge rotates within it.
+- [x] Track name: app page only.
+- [x] MIDI out per track: app page only (port + channel, `src/engine/midi.ts`). The track then plays on the external
+  gear instead of the internal sound (sequencer + pads; drums = General MIDI drum notes 36, 38, 42, 46, 39, 45, 50, 56).
+- [ ] Harmony mode per notes track (free / transpose / follow): with part 4 (needs the chords track as harmony source).
 
 ### 4. Key + harmony (CHORDS page, chords track)
 - [ ] Song key: root + scale (today fixed to A minor: `SCALE` / `ROOT` in `model.ts`). Pads, chords and generators follow.
@@ -173,7 +179,7 @@ Do this refactor first, then move the existing modifiers onto it (PERFORM, SELEC
 - [ ] PLUG-IN page: sound parameters per track (drums: per drum sound), strip = macro / morph.
 - [ ] STAR = save the current sound (engine + settings) as a favorite preset; SEARCH browses sounds incl. favorites.
 - [ ] Sound tuning: rework the sounds that feel weak (needs listening feedback, `src/engine/instruments/`).
-- [ ] More engines: samples (drum kits as WAV/OGG one-shots), smplr, Faust / AudioWorklet, MIDI out as an "instrument".
+- [ ] More engines: samples (drum kits as WAV/OGG one-shots), smplr, Faust / AudioWorklet.
 - [ ] Mutable Instruments DSP as engines (`../MI-Eurorack`, STM32 projects = **MIT**, keep the copyright notice; don't use
   the brand / module names as product names). C++ → WebAssembly (Emscripten, not installed yet; commit the built `.wasm`)
   → AudioWorklet node per track, behind the existing `Melodic` / `DrumKit` contract (SEARCH / STAR / page select work as is).

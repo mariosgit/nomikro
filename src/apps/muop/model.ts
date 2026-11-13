@@ -19,7 +19,28 @@ export interface Track {
     level: number;
     /** Octave offset for notes / chords (bass: -1). */
     octave: number;
+    /** Track steps per clock step (16th): 2 = double time, 1/4 = one step per beat, 1/16 = one per bar (RATES). */
+    rate: number;
+    /** Steps the track loops over, 1..16 (polymeter). */
+    length: number;
+    /** MIDI out instead of the internal sound, null = internal. */
+    midi: TrackMidi | null;
 }
+
+export interface TrackMidi {
+    /** MIDIOutput id. */
+    port: string;
+    /** Port name, to show it while the port isn't there. */
+    name: string;
+    /** 1..16 */
+    channel: number;
+}
+
+/** Clock rates, slow → fast. */
+export const RATES = [1 / 16, 1 / 8, 1 / 4, 1 / 2, 1, 2] as const;
+export const rateName = (rate: number) => (rate >= 1 ? `×${rate}` : `÷${Math.round(1 / rate)}`);
+export const KINDS: readonly (TrackKind | null)[] = [null, 'drums', 'notes', 'chords'];
+export const kindName = (kind: TrackKind | null) => (kind === null ? 'empty' : `${kind[0].toUpperCase()}${kind.slice(1)}`);
 
 export interface PatternTrack {
     /** drums: [sound][step] velocity 0..1, 0 = off */
@@ -53,14 +74,15 @@ export interface Song {
     volume: number;
 }
 
-const emptyTrack = (n: number): Track => ({ kind: null, name: `Track ${n + 1}`, sound: '', level: 1, octave: 0 });
+const TRACK_DEFAULTS = { rate: 1, length: STEPS, midi: null } as const;
+const emptyTrack = (n: number): Track => ({ kind: null, name: `Track ${n + 1}`, sound: '', level: 1, octave: 0, ...TRACK_DEFAULTS });
 
 /** Tracks 1–4 of a new song. */
 const DEFAULT_TRACKS: Track[] = [
-    { kind: 'drums', name: 'Drums', sound: 'tone', level: 1, octave: 0 },
-    { kind: 'notes', name: 'Bass', sound: 'basic-lead', level: 1, octave: -1 },
-    { kind: 'chords', name: 'Chords', sound: 'tone-pad', level: 0.8, octave: 0 },
-    { kind: 'notes', name: 'Lead', sound: 'tone-mono', level: 1, octave: 0 },
+    { kind: 'drums', name: 'Drums', sound: 'tone', level: 1, octave: 0, ...TRACK_DEFAULTS },
+    { kind: 'notes', name: 'Bass', sound: 'basic-lead', level: 1, octave: -1, ...TRACK_DEFAULTS },
+    { kind: 'chords', name: 'Chords', sound: 'tone-pad', level: 0.8, octave: 0, ...TRACK_DEFAULTS },
+    { kind: 'notes', name: 'Lead', sound: 'tone-mono', level: 1, octave: 0, ...TRACK_DEFAULTS },
 ];
 
 export const emptyPatternTrack = (): PatternTrack => ({
@@ -188,6 +210,12 @@ export function loadSong(): Song {
             const s = JSON.parse(raw) as Song;
             if (s.version === 2 && s.tracks?.length === TRACKS && s.patterns?.length === PATTERNS && s.chain?.length) {
                 for (const p of s.patterns) p.fx ??= Array.from({ length: STEPS }, () => []); // saved before punch-in FX
+                for (const t of s.tracks) {
+                    // saved before clock / length / MIDI per track
+                    t.rate ??= 1;
+                    t.length ??= STEPS;
+                    t.midi ??= null;
+                }
                 return s;
             }
         }

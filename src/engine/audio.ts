@@ -35,3 +35,12 @@ export function toAudioTime(time: number): number {
             : c.currentTime + (time - performance.now()) / 1000;
     return Math.max(c.currentTime, t);
 }
+
+/** AudioContext time (s) → performance.now() ms, the inverse of toAudioTime() (e.g. for MIDI out in sync with the audio). */
+export function fromAudioTime(t: number): number {
+    const c = audioContext();
+    const { contextTime, performanceTime } = c.getOutputTimestamp();
+    return contextTime !== undefined && performanceTime !== undefined && performanceTime > 0
+        ? performanceTime + (t - contextTime) * 1000
+        : performance.now() + (t - c.currentTime) * 1000;
+}

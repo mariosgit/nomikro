@@ -17,9 +17,15 @@ import {
     saveSong,
     type FxHit,
     type Song,
+    KINDS,
+    RATES,
+    STEPS,
+    kindName,
+    rateName,
     type PatternTrack,
     type Track,
     type TrackKind,
+    type TrackMidi,
 } from './model';
 import { Sequencer, fxKey, type Target } from './sequencer';
 import { FX, isTrackFx } from './fx';
@@ -27,8 +33,9 @@ import { devlog } from '../../dev/devlog';
 import { Metronome } from '../../engine/metronome';
 import { DRUM_SOUNDS, soundsFor, type Sounds } from './sounds';
 import { findInstrument, nextInstrument, type Voice } from '../../engine/instruments';
-import { Pages, type Cell, type Help, type Page } from './page';
+import { Pages, TAP_MS, type Cell, type Help, type Page } from './page';
 import { History } from './history';
+import { requestMidi } from '../../engine/midi';
 
 export type { Cell, Help } from './page';
 
@@ -38,9 +45,15 @@ export interface TrackView {
     sound: string;
     level: number;
     octave: number;
+    rate: number;
+    length: number;
+    midi: TrackMidi | null;
     /** Plays a random variation (STAR, not stored). */
     random: boolean;
 }
+
+/** Track settings, changed on the device (SELECT page) or on the app page (track list). */
+export type TrackSettings = Partial<Pick<Track, 'name' | 'kind' | 'octave' | 'rate' | 'length' | 'midi'>>;
 
 export interface MuOpView {
     /** Selected track 0..15. */
@@ -81,6 +94,8 @@ export const trackColor = (t: Pick<Track, 'kind' | 'octave'>): Color =>
     t.kind === 'drums' ? 'red' : t.kind === 'chords' ? 'violet' : t.kind === 'notes' ? (t.octave < 0 ? 'blue' : 'green') : 'off';
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const pct = (v: number) => String(Math.round(v * 100));
+/** Display line 2 on an empty track: how to start it. */
+const EMPTY = 'empty';
 
 /** Cheat sheet rows that aren't pages (before / after the generated page rows). */
 const HELP_TOP: Help[] = [
@@ -116,6 +131,8 @@ export class MuOpController {
     /** Per track: the note / chord written by step taps. */
     private pens: number[];
     private step = -1;
+    /** Per track: its current step (own rate / length), -1 = stopped. */
+    private positions: number[] = [];
     private message = 'μOp';
     /** Pattern taps while PATTERN is held (1 tap = select, more = chain). */
     private tapChain: number[] = [];
@@ -163,6 +180,7 @@ export class MuOpController {
         const offStep = this.seq.onStep((s) =>
             this.seq.clock.at(s.time, () => {
                 this.step = s.step;
+                this.positions = s.positions;
                 this.stepFx = s.fx;
                 if (!this.stepMode && !this.pages.active?.cells) {
                     for (const pad of s.pads[this.track]) if (pad >= 0 && pad < 16) this.flash(pad, this.padColor(pad));
@@ -177,6 +195,8 @@ export class MuOpController {
             this.sounds.setLevel(i, t.level);
             void this.setSound(i, t.sound, false);
         });
+        this.song.tracks.forEach((t, i) => this.sounds.setMidi(i, t.midi));
+        if (this.song.tracks.some((t) => t.midi)) void requestMidi();
         this.update();
         try {
             await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
@@ -218,12 +238,38 @@ export class MuOpController {
         }
     }
 
-    /** Selects a track (SELECT + pad, page). */
+    /** Selects a track (SELECT + pad, page). An empty track becomes a notes track with a random sound (kind: SELECT page). */
     selectTrack(track: number): void {
         this.track = track;
         this.heldStep = null;
         const t = this.cur;
-        this.say(t.kind ? `${this.label(track)}\n${findInstrument(soundsFor(t.kind), t.sound).name}` : `${this.label(track)}\nempty`);
+        if (!t.kind) {
+            this.setTrack(track, { kind: 'notes' });
+            return this.say(`${this.label(track)}\nnew, random sound`);
+        }
+        this.say(t.kind ? `${this.label(track)}\n${findInstrument(soundsFor(t.kind), t.sound).name}` : `${this.label(track)}\n${EMPTY}`);
+        this.update();
+    }
+
+    /** Changes track settings (SELECT page, track list on the app page). Saved in the song. */
+    setTrack(track: number, patch: TrackSettings): void {
+        const t = this.song.tracks[track];
+        const kindChanged = patch.kind !== undefined && patch.kind !== t.kind;
+        const wasEmpty = t.kind === null;
+        Object.assign(t, patch);
+        t.octave = clamp(Math.round(t.octave), -3, 3);
+        t.length = clamp(Math.round(t.length), 1, STEPS);
+        if (!RATES.includes(t.rate as (typeof RATES)[number])) t.rate = 1;
+        if (kindChanged && t.kind) {
+            const defs = soundsFor(t.kind);
+            // a new track starts with a random sound, a kind change keeps the sound if it fits
+            if (wasEmpty) t.sound = defs[Math.floor(Math.random() * defs.length)].id;
+            else if (!defs.some((d) => d.id === t.sound)) t.sound = defs[0].id;
+            this.sounds.setLevel(track, t.level);
+            void this.setSound(track, t.sound, false);
+        }
+        if ('midi' in patch) this.sounds.setMidi(track, t.midi);
+        this.saveSoon();
         this.update();
     }
 
@@ -248,13 +294,37 @@ export class MuOpController {
     private static definePages(c: MuOpController): Page[] {
         const held = (b: LedButton) => c.m.input.isHeld(b);
 
+        /** A setting of the selected track, shown as "value  T3". */
+        const setting = (name: string, help: string, show: (t: Track) => string, step: (t: Track, d: number) => TrackSettings | null) => ({
+            name,
+            help,
+            value: () => `${show(c.cur)}  T${c.track + 1}`,
+            step: (d: number) => {
+                const patch = step(c.cur, Math.sign(d));
+                if (patch) c.setTrack(c.track, patch);
+            },
+        });
         const select: Page = {
             button: 'select',
-            name: 'Select track',
-            hint: 'pad = track',
+            name: 'Track',
+            params: [
+                setting('Kind', 'kind (empty / drums / notes / chords: fills an empty track)', (t) => kindName(t.kind), (t, d) => ({
+                    kind: KINDS[clamp(KINDS.indexOf(t.kind) + d, 0, KINDS.length - 1)],
+                })),
+                setting('Octave', 'octave', (t) => (t.kind === 'drums' ? '–' : `${t.octave > 0 ? '+' : ''}${t.octave}`), (t, d) =>
+                    t.kind === 'drums' ? null : { octave: t.octave + d },
+                ),
+                setting('Clock', 'clock ÷16 … ×2 (steps per 16th)', (t) => rateName(t.rate), (t, d) => ({
+                    rate: RATES[clamp(RATES.indexOf(t.rate as (typeof RATES)[number]) + d, 0, RATES.length - 1)],
+                })),
+                setting('Length', 'length 1–16 steps', (t) => `${t.length} steps`, (t, d) => ({ length: t.length + d })),
+            ],
             cells: () => c.song.tracks.map((t, i) => (i === c.track ? { color: 'white', level: 3 } : t.kind ? { color: trackColor(t), level: 1 } : OFF)),
             padDown: (pad) => c.selectTrack(pad),
-            help: [{ keys: 'SELECT + pad', text: 'Select track 1–16 (pads show the tracks, selected = white). Everything else acts on the selected track' }],
+            help: [
+                { keys: 'SELECT + pad', text: 'Select track 1–16 (pads show the tracks, selected = white). Everything else acts on the selected track. An empty track becomes a notes track with a random sound (change the kind with < > + encoder)' },
+                { keys: 'App page', text: 'Track list: the same settings, plus the track name and MIDI out (port + channel; the track then plays on the external gear instead)' },
+            ],
         };
 
         const pattern: Page = {
@@ -408,7 +478,7 @@ export class MuOpController {
                 name: 'Next sound for the current track',
                 run: () => {
                     const kind = c.cur.kind;
-                    if (!kind) return c.say(`${c.label(c.track)}\nempty`);
+                    if (!kind) return c.say(`${c.label(c.track)}\n${EMPTY}`);
                     void c.setSound(c.track, nextInstrument(soundsFor(kind), c.cur.sound, 1).id);
                 },
             },
@@ -486,7 +556,7 @@ export class MuOpController {
                 this.padDown(e.pad, e.velocity, e.time);
                 break;
             case 'padUp':
-                this.padUp(e.pad);
+                this.padUp(e.pad, e.duration);
                 break;
             case 'encoder':
                 this.encoder(e.delta);
@@ -506,7 +576,7 @@ export class MuOpController {
         const shift = this.m.input.isHeld('shift');
         const kind = this.cur.kind;
         if (button === 'star') {
-            if (!kind) return this.say(`${this.label(this.track)}\nempty`);
+            if (!kind) return this.say(`${this.label(this.track)}\n${EMPTY}`);
             return void this.setSound(this.track, this.cur.sound, true, true);
         }
         if (button === 'tap' && shift) {
@@ -557,6 +627,7 @@ export class MuOpController {
 
         const now = this.sounds.ctx.currentTime;
         if (this.stepMode) {
+            if (pad >= this.cur.length) return this.say(`Step ${pad + 1}\nlength ${this.cur.length}`);
             if (kind === 'drums') {
                 this.history.edit(this.seq.pattern);
                 const row = steps.drums[this.drumSound];
@@ -597,7 +668,7 @@ export class MuOpController {
     private fxDown(pad: number): void {
         const def = FX[pad];
         const hit: FxHit = isTrackFx(pad) ? { fx: pad, track: this.track } : { fx: pad };
-        if (hit.track !== undefined && !this.cur.kind) return this.say(`${this.label(this.track)}\nempty`);
+        if (hit.track !== undefined && !this.cur.kind) return this.say(`${this.label(this.track)}\n${EMPTY}`);
         const where = hit.track !== undefined ? ` · ${this.label(this.track)}` : '';
         if (this.m.input.isHeld('erase')) {
             for (const hits of this.song.patterns[this.seq.pattern].fx) {
@@ -622,7 +693,7 @@ export class MuOpController {
         if (id) this.sounds.fx.release(id, this.sounds.ctx.currentTime);
     }
 
-    private padUp(pad: number): void {
+    private padUp(pad: number, duration: number): void {
         if (this.fxPads.has(pad)) this.fxUp(pad);
         for (const v of this.liveVoices.get(pad) ?? []) v.release();
         this.liveVoices.delete(pad);
@@ -630,7 +701,8 @@ export class MuOpController {
 
         const held = this.heldStep;
         if (held?.pad === pad) {
-            if (!held.created && !held.edited) {
+            // a short tap on a set step clears it; holding it (to look at / edit it) doesn't
+            if (!held.created && !held.edited && duration < TAP_MS) {
                 this.history.edit(this.seq.pattern);
                 this.song.patterns[this.seq.pattern].tracks[this.track].notes[pad] = null;
                 this.saveSoon();
@@ -703,7 +775,14 @@ export class MuOpController {
     /** Rotates the current track one step (drums in STEP mode: the selected sound only). */
     private nudge(dir: 1 | -1): void {
         const steps = this.song.patterns[this.seq.pattern].tracks[this.track];
-        const rotate = <T>(a: T[]) => (dir > 0 ? a.unshift(a.pop()!) : a.push(a.shift()!));
+        const len = this.cur.length;
+        // rotates the first `length` steps (the ones the track plays)
+        const rotate = <T>(a: T[]) => {
+            const part = a.slice(0, len);
+            if (dir > 0) part.unshift(part.pop()!);
+            else part.push(part.shift()!);
+            a.splice(0, len, ...part);
+        };
         this.history.edit(this.seq.pattern);
         const one = this.cur.kind === 'drums' && this.stepMode;
         if (this.cur.kind === 'drums') {
@@ -746,8 +825,7 @@ export class MuOpController {
 
     private octave(dir: 1 | -1): void {
         const t = this.cur;
-        t.octave = clamp(t.octave + dir, -3, 3);
-        this.saveSoon();
+        this.setTrack(this.track, { octave: t.octave + dir });
         this.say(`${this.label(this.track)}\noctave ${t.octave > 0 ? '+' : ''}${t.octave}`);
     }
 
@@ -812,6 +890,7 @@ export class MuOpController {
         if (!kind) return all(() => OFF);
         if (this.stepMode) {
             return all((s): Cell => {
+                if (s >= this.cur.length) return OFF; // beyond the track's length
                 if (kind === 'drums') {
                     const v = steps.drums[this.drumSound][s];
                     if (v > 0) return { color: DRUM_SOUNDS[this.drumSound].color, level: v > 0.66 ? 3 : v > 0.33 ? 2 : 1 };
@@ -834,8 +913,9 @@ export class MuOpController {
         cells.forEach((c, i) => this.grid.pad(i, c.color, c.level));
 
         this.playhead.clear();
-        const showHead = this.stepMode && this.seq.playing && this.step >= 0 && !this.pages.active?.cells;
-        if (showHead) this.playhead.pad(this.step, 'white', 3);
+        const head = this.positions[this.track] ?? -1;
+        const showHead = this.stepMode && this.seq.playing && head >= 0 && !this.pages.active?.cells;
+        if (showHead) this.playhead.pad(head, 'white', 3);
         // the display stays on while a page button or a step is held, blanks 3 s after release
         this.m.screen.hold(!!this.pages.active || !!this.heldStep);
         if (!this.recording && !this.m.input.heldButtons.length && !this.m.input.heldPads.length) this.history.close();
@@ -861,7 +941,7 @@ export class MuOpController {
         for (const b of LED_BUTTONS) l.button(b, lit.get(b) ?? 0);
         l.flush();
 
-        if (showHead) cells[this.step] = { color: 'white', level: 3 };
+        if (showHead) cells[head] = { color: 'white', level: 3 };
         this.view = this.makeView(cells);
         this.notify();
     }
@@ -907,7 +987,17 @@ export class MuOpController {
     private makeView(cells: Cell[] = this.cells()): MuOpView {
         return {
             track: this.track,
-            tracks: this.song.tracks.map((t, i) => ({ name: t.name, kind: t.kind, sound: t.sound, level: t.level, octave: t.octave, random: this.sounds.isRandom(i) })),
+            tracks: this.song.tracks.map((t, i) => ({
+                name: t.name,
+                kind: t.kind,
+                sound: t.sound,
+                level: t.level,
+                octave: t.octave,
+                rate: t.rate,
+                length: t.length,
+                midi: t.midi,
+                random: this.sounds.isRandom(i),
+            })),
             stepMode: this.stepMode,
             drumSound: this.drumSound,
             pen: this.pens[this.track],

@@ -4,8 +4,9 @@ import type { Color } from '../../maschine';
 import { audioContext, audioRunning } from '../../engine/audio';
 import { useDeviceTask } from '../../shell/device';
 import type { AppDef, AppProps } from '../../shell/types';
-import { MuOpController, trackColor, type Cell, type MuOpView } from './controller';
-import { chordName, degreeName, loadSong } from './model';
+import { MuOpController, trackColor, type Cell, type MuOpView, type TrackView } from './controller';
+import { KINDS, RATES, STEPS, chordName, degreeName, kindName, loadSong, rateName, type TrackKind } from './model';
+import { midiOutputs, onMidiChange, requestMidi, type MidiPortInfo } from '../../engine/midi';
 import { DRUM_SOUNDS, Sounds, soundsFor } from './sounds';
 import { FX } from './fx';
 import { buttonLabel, type Help as HelpRow } from './page';
@@ -102,50 +103,7 @@ function MuOp({ maschine }: AppProps) {
                 )}
             </section>
 
-            {v && ctl && (
-                <section className="overflow-x-auto rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-                    <table className="w-full text-sm">
-                        <thead className="text-left text-xs text-zinc-500 dark:text-zinc-400">
-                            <tr className="border-b border-zinc-200 dark:border-zinc-800">
-                                <th className="px-4 py-2 font-medium">#</th>
-                                <th className="px-2 py-2 font-medium">Track</th>
-                                <th className="px-2 py-2 font-medium">Sound</th>
-                                <th className="px-4 py-2 text-right font-medium">Volume</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {v.tracks.map((t, i) =>
-                                t.kind ? (
-                                    <tr
-                                        key={i}
-                                        onClick={() => ctl.selectTrack(i)}
-                                        className={`cursor-pointer border-b border-zinc-100 last:border-0 dark:border-zinc-800/60 ${
-                                            i === v.track ? 'bg-orange-50 dark:bg-orange-950/40' : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/40'
-                                        }`}
-                                    >
-                                        <td className="px-4 py-1.5 text-zinc-500 dark:text-zinc-400">
-                                            <span className="mr-2 inline-block size-2 rounded-full" style={{ backgroundColor: CSS[trackColor(t)] }} />
-                                            {i + 1}
-                                        </td>
-                                        <td className="px-2 py-1.5 font-medium">
-                                            {t.name} <span className="text-xs font-normal text-zinc-500 dark:text-zinc-400">{t.kind}</span>
-                                        </td>
-                                        <td className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
-                                            <SoundSelect value={t.sound} random={t.random} defs={soundsFor(t.kind)} onChange={(id) => ctl.setSound(i, id)} />
-                                        </td>
-                                        <td className="px-4 py-1.5 text-right tabular-nums">{Math.round(t.level * 100)}</td>
-                                    </tr>
-                                ) : null,
-                            )}
-                            <tr>
-                                <td colSpan={4} className="px-4 py-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-                                    Tracks {v.tracks.findIndex((t) => !t.kind) + 1}–16: empty (for later)
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </section>
-            )}
+            {v && ctl && <TrackList v={v} ctl={ctl} />}
 
             <section className="rounded-xl border border-zinc-200 bg-white p-5 text-sm shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
                 <h2 className="mb-2 font-semibold">Controls</h2>
@@ -182,6 +140,178 @@ function PadCell({ cell, label }: { cell: Cell | undefined; label: number }) {
     );
 }
 
+const SELECT = 'rounded-md border border-zinc-300 bg-transparent px-1.5 py-0.5 text-sm dark:border-zinc-700';
+const TH = 'px-2 py-2 font-medium';
+const TD = 'px-2 py-1';
+
+function useMidiPorts(): MidiPortInfo[] {
+    const [ports, setPorts] = useState(midiOutputs);
+    useEffect(() => onMidiChange(() => setPorts(midiOutputs())), []);
+    return ports;
+}
+
+/** All 16 tracks with their settings. Name and MIDI out are only set here; the rest also on the device (SELECT page). */
+function TrackList({ v, ctl }: { v: MuOpView; ctl: MuOpController }) {
+    const ports = useMidiPorts();
+    return (
+        <section className="overflow-x-auto rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+            <table className="w-full text-sm">
+                <thead className="text-left text-xs text-zinc-500 dark:text-zinc-400">
+                    <tr className="border-b border-zinc-200 dark:border-zinc-800">
+                        <th className="px-4 py-2 font-medium">#</th>
+                        <th className={TH}>Name</th>
+                        <th className={TH}>Kind</th>
+                        <th className={TH}>Sound</th>
+                        <th className={TH}>Octave</th>
+                        <th className={TH}>Clock</th>
+                        <th className={TH}>Length</th>
+                        <th className={`${TH} text-right`}>Volume</th>
+                        <th className={`${TH} pr-4`}>MIDI out</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {v.tracks.map((t, i) => (
+                        <TrackRow key={i} i={i} t={t} selected={i === v.track} ctl={ctl} ports={ports} />
+                    ))}
+                </tbody>
+            </table>
+        </section>
+    );
+}
+
+function TrackRow({ i, t, selected, ctl, ports }: { i: number; t: TrackView; selected: boolean; ctl: MuOpController; ports: MidiPortInfo[] }) {
+    const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+    const empty = !t.kind;
+    const portMissing = t.midi && !ports.some((p) => p.id === t.midi!.port);
+    return (
+        <tr
+            onClick={() => ctl.selectTrack(i)}
+            className={`cursor-pointer border-b border-zinc-100 last:border-0 dark:border-zinc-800/60 ${
+                selected ? 'bg-orange-50 dark:bg-orange-950/40' : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/40'
+            } ${empty ? 'text-zinc-400 dark:text-zinc-500' : ''}`}
+        >
+            <td className="px-4 py-1 whitespace-nowrap text-zinc-500 dark:text-zinc-400">
+                <span className="mr-2 inline-block size-2 rounded-full" style={{ backgroundColor: CSS[trackColor(t)] }} />
+                {i + 1}
+            </td>
+            <td className={TD} onClick={stop}>
+                <NameInput value={t.name} onChange={(name) => ctl.setTrack(i, { name })} />
+            </td>
+            <td className={TD} onClick={stop}>
+                <select value={t.kind ?? ''} onChange={(e) => ctl.setTrack(i, { kind: (e.target.value || null) as TrackKind | null })} className={SELECT}>
+                    {KINDS.map((k) => (
+                        <option key={k ?? ''} value={k ?? ''} className="text-zinc-900">
+                            {kindName(k)}
+                        </option>
+                    ))}
+                </select>
+            </td>
+            <td className={TD} onClick={stop}>
+                {t.kind && !t.midi ? (
+                    <SoundSelect value={t.sound} random={t.random} defs={soundsFor(t.kind)} onChange={(id) => ctl.setSound(i, id)} />
+                ) : (
+                    <span className="text-xs text-zinc-400">{t.midi ? 'MIDI' : '–'}</span>
+                )}
+            </td>
+            <td className={TD} onClick={stop}>
+                {t.kind && t.kind !== 'drums' ? (
+                    <select value={t.octave} onChange={(e) => ctl.setTrack(i, { octave: Number(e.target.value) })} className={SELECT}>
+                        {[-3, -2, -1, 0, 1, 2, 3].map((o) => (
+                            <option key={o} value={o} className="text-zinc-900">
+                                {o > 0 ? `+${o}` : o}
+                            </option>
+                        ))}
+                    </select>
+                ) : (
+                    <span className="text-xs text-zinc-400">–</span>
+                )}
+            </td>
+            <td className={TD} onClick={stop}>
+                <select value={t.rate} onChange={(e) => ctl.setTrack(i, { rate: Number(e.target.value) })} className={SELECT} disabled={empty}>
+                    {RATES.map((r) => (
+                        <option key={r} value={r} className="text-zinc-900">
+                            {rateName(r)}
+                        </option>
+                    ))}
+                </select>
+            </td>
+            <td className={TD} onClick={stop}>
+                <select value={t.length} onChange={(e) => ctl.setTrack(i, { length: Number(e.target.value) })} className={SELECT} disabled={empty}>
+                    {Array.from({ length: STEPS }, (_, n) => n + 1).map((n) => (
+                        <option key={n} value={n} className="text-zinc-900">
+                            {n}
+                        </option>
+                    ))}
+                </select>
+            </td>
+            <td className={`${TD} text-right tabular-nums`}>{empty ? '' : Math.round(t.level * 100)}</td>
+            <td className={`${TD} pr-4 whitespace-nowrap`} onClick={stop}>
+                <select
+                    value={t.midi?.port ?? ''}
+                    onPointerDown={() => void requestMidi()}
+                    onFocus={() => void requestMidi()}
+                    onChange={(e) => {
+                        const port = ports.find((p) => p.id === e.target.value);
+                        ctl.setTrack(i, { midi: port ? { port: port.id, name: port.name, channel: t.midi?.channel ?? 1 } : null });
+                    }}
+                    className={`${SELECT} max-w-40`}
+                    disabled={empty}
+                >
+                    <option value="" className="text-zinc-900">
+                        internal
+                    </option>
+                    {portMissing && (
+                        <option value={t.midi!.port} className="text-zinc-900">
+                            {t.midi!.name} (not connected)
+                        </option>
+                    )}
+                    {ports.map((p) => (
+                        <option key={p.id} value={p.id} className="text-zinc-900">
+                            {p.name}
+                        </option>
+                    ))}
+                </select>
+                {t.midi && (
+                    <select
+                        value={t.midi.channel}
+                        onChange={(e) => ctl.setTrack(i, { midi: { ...t.midi!, channel: Number(e.target.value) } })}
+                        className={`${SELECT} ml-1`}
+                        title="MIDI channel"
+                    >
+                        {Array.from({ length: 16 }, (_, n) => n + 1).map((n) => (
+                            <option key={n} value={n} className="text-zinc-900">
+                                ch {n}
+                            </option>
+                        ))}
+                    </select>
+                )}
+            </td>
+        </tr>
+    );
+}
+
+/** Local text while typing (the view updates a frame later), committed on every change. */
+function NameInput({ value, onChange }: { value: string; onChange(name: string): void }) {
+    const [text, setText] = useState(value);
+    const [editing, setEditing] = useState(false);
+    return (
+        <input
+            value={editing ? text : value}
+            onFocus={() => {
+                setText(value);
+                setEditing(true);
+            }}
+            onBlur={() => setEditing(false)}
+            onChange={(e) => {
+                setText(e.target.value);
+                onChange(e.target.value);
+            }}
+            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+            className="w-28 rounded-md border border-transparent bg-transparent px-1.5 py-0.5 font-medium hover:border-zinc-300 focus:border-zinc-400 dark:hover:border-zinc-700"
+        />
+    );
+}
+
 function SoundSelect({
     value,
     random,
@@ -198,7 +328,7 @@ function SoundSelect({
             <select
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
-                className="rounded-md border border-zinc-300 bg-transparent px-1.5 py-0.5 text-sm dark:border-zinc-700"
+                className={SELECT}
             >
                 {defs.map((d) => (
                     <option key={d.id} value={d.id} className="text-zinc-900">

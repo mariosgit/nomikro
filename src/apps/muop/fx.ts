@@ -48,8 +48,8 @@ export interface FxSource {
 }
 
 /**
- * One track FX in action. Engaged at clock index `engage` on (pattern, step); source() maps later clock indexes to the
- * step to play. The song position keeps running underneath, so releasing returns to where the song would be.
+ * One track FX in action. Engaged at track step `engage` (the track's own step counter, see the sequencer) on
+ * (pattern, step); source() maps later track steps to the step to play. The song position keeps running underneath, so releasing returns to where the song would be.
  */
 export class TrackFx {
     constructor(
@@ -57,12 +57,14 @@ export class TrackFx {
         private engage: number,
         private pattern: number,
         private step: number,
+        /** The track's length (steps it loops over). */
+        private length = STEPS,
     ) {}
 
     source(index: number): FxSource | null {
         const kind = FX[this.fx].track!;
         const k = index - this.engage;
-        const at = (step: number, hits = 1): FxSource => ({ pattern: this.pattern, step: mod(step, STEPS), hits });
+        const at = (step: number, hits = 1): FxSource => ({ pattern: this.pattern, step: mod(step, this.length), hits });
         switch (kind.type) {
             case 'loop': {
                 // loop window aligned to the grid (Loop 4 = the current beat), playing on from the press

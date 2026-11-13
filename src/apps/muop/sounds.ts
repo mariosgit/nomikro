@@ -2,11 +2,16 @@
 // each → track gain (track volume) → low-pass (touch strip) → punch-in FX bus → master gain (volume) → speakers.
 import type { Color } from '../../maschine';
 import { DRUM_KITS, DRUM_ROLES, MELODIC, findInstrument, type DrumKit, type InstrumentDef, type Melodic, type Voice } from '../../engine/instruments';
-import type { TrackKind } from './model';
+import type { TrackKind, TrackMidi } from './model';
+import { midiAllOff, midiNote } from '../../engine/midi';
+import { fromAudioTime } from '../../engine/audio';
 import { MasterFx } from '../../engine/fx';
 
 const DRUM_COLORS: Color[] = ['red', 'orange', 'yellow', 'lime', 'cyan', 'blue', 'violet', 'magenta'];
-export const DRUM_SOUNDS = DRUM_ROLES.map((name, i) => ({ name, color: DRUM_COLORS[i] }));
+/** General MIDI drum notes, in DRUM_ROLES order (kick, snare, closed hat, open hat, clap, low tom, high tom, cowbell). */
+const GM_DRUMS = [36, 38, 42, 46, 39, 45, 50, 56];
+export const DRUM_SOUNDS = DRUM_ROLES.map((name, i) => ({ name, color: DRUM_COLORS[i], gm: GM_DRUMS[i] }));
+const DRUM_MIDI_MS = 50;
 
 /** Instruments a track kind can use: drum kits for drums, melodic instruments for notes / chords. */
 export const soundsFor = (kind: TrackKind): readonly InstrumentDef<DrumKit | Melodic>[] => (kind === 'drums' ? DRUM_KITS : MELODIC);
@@ -24,6 +29,8 @@ interface Slot {
     gain: GainNode;
     /** Bumped per load, so only the latest of overlapping loads wins. */
     loading: number;
+    /** MIDI out instead of the instrument. */
+    midi: TrackMidi | null;
 }
 
 export class Sounds {
@@ -84,16 +91,30 @@ export class Sounds {
         this.filter.frequency.setTargetAtTime(hz, this.ctx.currentTime, amount === null ? 0.08 : 0.02);
     }
 
-    drum(track: number, sound: number, t: number, velocity: number): void {
-        this.slots.get(track)?.drums?.trigger(sound, t, velocity);
+    /** Routes a track to MIDI out (null = back to its instrument). */
+    setMidi(track: number, midi: TrackMidi | null): void {
+        const slot = this.slot(track);
+        if (slot.midi) midiAllOff(slot.midi.port, slot.midi.channel);
+        slot.midi = midi && { ...midi };
     }
 
+    /** `t` = audio time (s). */
+    drum(track: number, sound: number, t: number, velocity: number): void {
+        const slot = this.slots.get(track);
+        if (slot?.midi) midiNote(slot.midi.port, slot.midi.channel, DRUM_SOUNDS[sound]?.gm ?? 36, velocity, fromAudioTime(t), DRUM_MIDI_MS);
+        else slot?.drums?.trigger(sound, t, velocity);
+    }
+
+    /** `t` = audio time (s), `duration` in s (none = until release()). */
     note(track: number, midi: number, t: number, velocity: number, duration?: number): Voice {
-        return this.slots.get(track)?.melodic?.note(midi, t, velocity, duration) ?? SILENT;
+        const slot = this.slots.get(track);
+        if (slot?.midi) return midiNote(slot.midi.port, slot.midi.channel, midi, velocity, fromAudioTime(t), duration === undefined ? undefined : duration * 1000);
+        return slot?.melodic?.note(midi, t, velocity, duration) ?? SILENT;
     }
 
     dispose(): void {
         this.disposed = true;
+        for (const slot of this.slots.values()) if (slot.midi) midiAllOff(slot.midi.port, slot.midi.channel);
         this.master.gain.setTargetAtTime(0, this.ctx.currentTime, 0.02);
         setTimeout(() => {
             for (const slot of this.slots.values()) (slot.drums ?? slot.melodic)?.dispose();
@@ -106,7 +127,7 @@ export class Sounds {
         if (!slot) {
             const gain = new GainNode(this.ctx, { gain: 1 });
             gain.connect(this.filter);
-            slot = { drums: null, melodic: null, id: '', random: false, gain, loading: 0 };
+            slot = { drums: null, melodic: null, id: '', random: false, gain, loading: 0, midi: null };
             this.slots.set(track, slot);
         }
         return slot;
