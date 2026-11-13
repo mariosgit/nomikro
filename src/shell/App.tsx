@@ -119,7 +119,7 @@ export function App() {
             <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-800 dark:bg-zinc-900/80">
                 <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-3 px-4 py-3">
                     <a href={toHash({ app: 'muop', path: '', params: {} })} className="flex items-baseline gap-2">
-                        <span className="text-lg font-bold tracking-tight" title="nomikro">
+                        <span className="text-4xl font-bold tracking-tight" title="nomikro">
                             noμ
                         </span>
                     </a>
