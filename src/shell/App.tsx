@@ -124,6 +124,7 @@ export function App() {
                         </span>
                     </a>
 
+
                     <nav className="flex flex-1 flex-wrap items-center gap-1" aria-label="Apps">
                         {APP_NAMES.map((name) => (
                             <a
@@ -131,16 +132,19 @@ export function App() {
                                 href={toHash({ app: name, path: '', params: {} })}
                                 title={APPS[name].description}
                                 aria-current={name === appName ? 'page' : undefined}
-                                className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
-                                    name === appName
+                                className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${name === appName
                                         ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
                                         : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-white'
-                                }`}
+                                    }`}
                             >
                                 {name === appName ? (APPS[name].title ?? APPS[name].label) : APPS[name].label}
                             </a>
                         ))}
                     </nav>
+
+                    <a href="https://www.buymeacoffee.com/mariosgeu" target="_blank">
+                        <img src="https://cdn.buymeacoffee.com/buttons/default-orange.png" alt="Buy Me A Coffee" height="32" width="128" />
+                    </a>
 
                     <div className="flex items-center gap-3">
                         <StatusBadge status={status} />
@@ -196,9 +200,8 @@ const STATUS_DOT: Record<Status['kind'], string> = {
 function StatusBadge({ status }: { status: Status }) {
     return (
         <span
-            className={`inline-flex max-w-xs items-center gap-2 truncate text-sm ${
-                status.kind === 'error' ? 'text-red-600 dark:text-red-400' : 'text-zinc-600 dark:text-zinc-300'
-            }`}
+            className={`inline-flex max-w-xs items-center gap-2 truncate text-sm ${status.kind === 'error' ? 'text-red-600 dark:text-red-400' : 'text-zinc-600 dark:text-zinc-300'
+                }`}
             title={status.text}
         >
             <span className={`size-2 shrink-0 rounded-full ${STATUS_DOT[status.kind]}`} />

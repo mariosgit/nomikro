@@ -11,6 +11,11 @@ The name? Uhh that evolved no-py and mikro... so what...
 
 [goto MüOp](https://mariosgit.github.io/nomikro/) use chome/chromium !
 
+| | |
+|---|---|
+| If you like this sort of content or if its been even usefull to you, feel free motivating me publishing such stuff. | <a href="https://www.buymeacoffee.com/mariosgeu" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/default-orange.png" alt="Buy Me A Coffee" height="32" width="128"></a> |
+|||
+
 ## Get started
 
 ```
