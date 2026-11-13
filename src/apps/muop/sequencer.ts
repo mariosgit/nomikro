@@ -1,7 +1,8 @@
 // μOp sequencer: plays the song's pattern chain on the clock, records live hits quantized to the nearest step.
 import { Clock } from '../../engine/clock';
 import { toAudioTime } from '../../engine/audio';
-import { CHORDS, DRUMS, STEPS, chordNotes, degreeToMidi, type FxHit, type Song } from './model';
+import { DRUMS, STEPS, type FxHit, type Song } from './model';
+import { chordAt, harmonyTrack, trackMidis } from './harmony';
 import { FX, TrackFx } from './fx';
 import type { MasterFxId } from '../../engine/fx';
 import type { Sounds } from './sounds';
@@ -51,6 +52,8 @@ export class Sequencer {
     readonly liveFx = new Map<string, FxHit>();
     /** Write held FX into the pattern (REC on). */
     recordFx = false;
+    /** The harmony track's chord on the last scheduled step (null = none), for live pads on following tracks. */
+    chord: number | null = null;
     /** Called before the sequencer changes a pattern (recording), for the undo history. */
     onEdit: (pattern: number) => void = () => {};
     /** Running track FX, per track. */
@@ -168,6 +171,11 @@ export class Sequencer {
         const active = [...this.song.patterns[pattern].fx[step], ...this.liveFx.values()];
         this.applyFx(active, tick, pattern, t, duration);
 
+        // the current chord: the harmony track (first chords track) at its own step
+        const h = harmonyTrack(this.song);
+        const ht = this.song.tracks[h];
+        this.chord = h < 0 ? null : chordAt(this.song.patterns[pattern], h, ht.length, trackPos(tick, ht.rate) % ht.length);
+
         const pads = this.song.tracks.map((track, i): number[] => {
             if (track.kind === null) return [];
             const played: number[] = [];
@@ -194,8 +202,8 @@ export class Sequencer {
                 }
                 const n = steps.notes[src.step];
                 if (n === null || this.skip.delete(this.key(src.pattern, src.step, { track: i }))) continue;
-                if (track.kind === 'chords' && (n < 0 || n >= CHORDS)) continue; // a notes value after a kind change
-                const midis = track.kind === 'chords' ? chordNotes(n, track.octave) : [degreeToMidi(n, track.octave)];
+                const midis = trackMidis(track, n, this.chord, this.song); // [] = a notes value on a chords track
+                if (!midis.length) continue;
                 for (let h = 0; h < src.hits; h++) for (const midi of midis) this.sounds.note(i, midi, at(h), 0.8, hitLength);
                 played.push(n);
             }
@@ -257,7 +265,8 @@ export class Sequencer {
         return true;
     }
 
-    private peekNextPattern(): number {
+    /** The pattern that plays after the current one (chain / queued chain). */
+    peekNextPattern(): number {
         if (this.pendingChain) return this.pendingChain[0];
         return this.song.chain[(this.chainPos + 1) % this.song.chain.length];
     }

@@ -5,7 +5,7 @@ import { audioContext, audioRunning } from '../../engine/audio';
 import { useDeviceTask } from '../../shell/device';
 import type { AppDef, AppProps } from '../../shell/types';
 import { MuOpController, trackColor, type Cell, type MuOpView, type TrackView } from './controller';
-import { KINDS, RATES, STEPS, chordName, degreeName, kindName, loadSong, rateName, type TrackKind } from './model';
+import { HARMONY_MODES, KINDS, NOTE_NAMES, RATES, SCALES, STEPS, VOICINGS, kindName, loadSong, rateName, type HarmonyMode, type TrackKind } from './model';
 import { midiOutputs, onMidiChange, requestMidi, type MidiPortInfo } from '../../engine/midi';
 import { DRUM_SOUNDS, Sounds, soundsFor } from './sounds';
 import { FX } from './fx';
@@ -88,6 +88,23 @@ function MuOp({ maschine }: AppProps) {
                             k="Transport"
                             v={`${v.playing ? '▶ playing' : '■ stopped'}${v.recording ? ' · ● rec' : ''}${v.metronome ? ' · metronome' : ''}${v.step >= 0 ? ` · step ${v.step + 1}` : ''}`}
                         />
+                        <dt className="text-zinc-500 dark:text-zinc-400">Key</dt>
+                        <dd>
+                            <select value={v.root} onChange={(e) => ctl!.setKey({ root: Number(e.target.value) })} className={SELECT}>
+                                {NOTE_NAMES.map((n, i) => (
+                                    <option key={n} value={i} className="text-zinc-900">
+                                        {n}
+                                    </option>
+                                ))}
+                            </select>{' '}
+                            <select value={v.scale} onChange={(e) => ctl!.setKey({ scale: e.target.value })} className={SELECT}>
+                                {SCALES.map((sc) => (
+                                    <option key={sc.id} value={sc.id} className="text-zinc-900">
+                                        {sc.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </dd>
                         <Stat k="Pattern" v={String(v.pattern + 1)} />
                         <Stat
                             k="Chain"
@@ -150,9 +167,11 @@ function useMidiPorts(): MidiPortInfo[] {
     return ports;
 }
 
-/** All 16 tracks with their settings. Name and MIDI out are only set here; the rest also on the device (SELECT page). */
+/** The tracks in use with their settings (empty ones hidden, "+ track" enables the next). Name and MIDI out are only set here; the rest also on the device (SELECT page). */
 function TrackList({ v, ctl }: { v: MuOpView; ctl: MuOpController }) {
     const ports = useMidiPorts();
+    /** The next empty track (the "+" row enables it), -1 = all 16 in use. */
+    const next = v.tracks.findIndex((t) => !t.kind);
     return (
         <section className="overflow-x-auto rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
             <table className="w-full text-sm">
@@ -165,14 +184,28 @@ function TrackList({ v, ctl }: { v: MuOpView; ctl: MuOpController }) {
                         <th className={TH}>Octave</th>
                         <th className={TH}>Clock</th>
                         <th className={TH}>Length</th>
+                        <th className={TH} title="Notes tracks: free / transpose / follow the first chords track. Chords tracks: voicing">
+                            Harmony
+                        </th>
                         <th className={`${TH} text-right`}>Volume</th>
                         <th className={`${TH} pr-4`}>MIDI out</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {v.tracks.map((t, i) => (
-                        <TrackRow key={i} i={i} t={t} selected={i === v.track} ctl={ctl} ports={ports} />
-                    ))}
+                    {v.tracks.map((t, i) => (t.kind ? <TrackRow key={i} i={i} t={t} selected={i === v.track} ctl={ctl} ports={ports} /> : null))}
+                    {next >= 0 && (
+                        <tr>
+                            <td colSpan={10} className="px-4 py-1">
+                                <button
+                                    onClick={() => ctl.selectTrack(next)}
+                                    title={`Add track ${next + 1}: a notes track with a random sound (like SELECT + an empty pad)`}
+                                    className="rounded-md px-2 py-0.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                                >
+                                    + track
+                                </button>
+                            </td>
+                        </tr>
+                    )}
                 </tbody>
             </table>
         </section>
@@ -243,6 +276,27 @@ function TrackRow({ i, t, selected, ctl, ports }: { i: number; t: TrackView; sel
                         </option>
                     ))}
                 </select>
+            </td>
+            <td className={TD} onClick={stop}>
+                {t.kind === 'notes' ? (
+                    <select value={t.harmony} onChange={(e) => ctl.setTrack(i, { harmony: e.target.value as HarmonyMode })} className={SELECT}>
+                        {HARMONY_MODES.map((h) => (
+                            <option key={h} value={h} className="text-zinc-900">
+                                {h}
+                            </option>
+                        ))}
+                    </select>
+                ) : t.kind === 'chords' ? (
+                    <select value={t.voicing} onChange={(e) => ctl.setTrack(i, { voicing: Number(e.target.value) })} className={SELECT}>
+                        {VOICINGS.map((name, n) => (
+                            <option key={name} value={n} className="text-zinc-900">
+                                {name}
+                            </option>
+                        ))}
+                    </select>
+                ) : (
+                    <span className="text-xs text-zinc-400">–</span>
+                )}
             </td>
             <td className={`${TD} text-right tabular-nums`}>{empty ? '' : Math.round(t.level * 100)}</td>
             <td className={`${TD} pr-4 whitespace-nowrap`} onClick={stop}>
@@ -346,8 +400,7 @@ function trackSummary(v: MuOpView): string {
     const t = v.tracks[v.track];
     const head = `${v.track + 1} ${t.name}`;
     if (t.kind === 'drums') return `${head} · ${DRUM_SOUNDS[v.drumSound].name}`;
-    if (t.kind === 'chords') return `${head} · pen ${chordName(v.pen)}`;
-    if (t.kind === 'notes') return `${head} · pen ${degreeName(v.pen, t.octave)}`;
+    if (t.kind === 'chords' || t.kind === 'notes') return `${head} · pen ${v.penName}`;
     return `${head} · empty`;
 }
 

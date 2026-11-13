@@ -25,7 +25,18 @@ export interface Track {
     length: number;
     /** MIDI out instead of the internal sound, null = internal. */
     midi: TrackMidi | null;
+    /** Notes tracks: how they follow the harmony track (the first chords track). */
+    harmony: HarmonyMode;
+    /** Chords tracks: index into VOICINGS. */
+    voicing: number;
 }
+
+/**
+ * free = plays the scale degrees as written; transpose = shifted by the current chord's root (stays in the scale);
+ * follow = the values are chord tones (0 = root, 1 = 3rd, 2 = 5th, 3 = root an octave up, …).
+ */
+export type HarmonyMode = 'free' | 'transpose' | 'follow';
+export const HARMONY_MODES: readonly HarmonyMode[] = ['free', 'transpose', 'follow'];
 
 export interface TrackMidi {
     /** MIDIOutput id. */
@@ -72,9 +83,14 @@ export interface Song {
     swing: number;
     /** Master volume 0..1 */
     volume: number;
+    /** Song key: root pitch class 0..11 (C = 0) and scale id (SCALES). Steps store scale degrees, so it transposes the song. */
+    root: number;
+    scale: string;
 }
 
-const TRACK_DEFAULTS = { rate: 1, length: STEPS, midi: null } as const;
+export type Key = Pick<Song, 'root' | 'scale'>;
+
+const TRACK_DEFAULTS = { rate: 1, length: STEPS, midi: null, harmony: 'free', voicing: 0 } as const;
 const emptyTrack = (n: number): Track => ({ kind: null, name: `Track ${n + 1}`, sound: '', level: 1, octave: 0, ...TRACK_DEFAULTS });
 
 /** Tracks 1–4 of a new song. */
@@ -122,49 +138,86 @@ export function newSong(): Song {
         bpm: 110,
         swing: 54,
         volume: 0.8,
+        root: 9,
+        scale: 'minor',
     };
 }
 
-// --- scale: A natural minor, degree 0 = A2 (octave offset per track) ---
+// --- key: root + scale. Degree 0 = the root in octave 2 (C2..B2), plus the track's octave offset ---
 
-const SCALE = [0, 2, 3, 5, 7, 8, 10];
-const ROOT = 45; // A2
+export const SCALES: readonly { id: string; name: string; steps: readonly number[] }[] = [
+    { id: 'minor', name: 'minor', steps: [0, 2, 3, 5, 7, 8, 10] },
+    { id: 'major', name: 'major', steps: [0, 2, 4, 5, 7, 9, 11] },
+    { id: 'dorian', name: 'dorian', steps: [0, 2, 3, 5, 7, 9, 10] },
+    { id: 'mixolydian', name: 'mixolyd.', steps: [0, 2, 4, 5, 7, 9, 10] },
+    { id: 'phrygian', name: 'phrygian', steps: [0, 1, 3, 5, 7, 8, 10] },
+    { id: 'lydian', name: 'lydian', steps: [0, 2, 4, 6, 7, 9, 11] },
+    { id: 'harmonic', name: 'harm. minor', steps: [0, 2, 3, 5, 7, 8, 11] },
+    { id: 'pent-minor', name: 'pent. minor', steps: [0, 3, 5, 7, 10] },
+    { id: 'pent-major', name: 'pent. major', steps: [0, 2, 4, 7, 9] },
+];
+/** Scales on the CHORDS page pads 13–16. */
+export const QUICK_SCALES = ['minor', 'major', 'dorian', 'mixolydian'] as const;
+
+export const findScale = (id: string) => SCALES.find((s) => s.id === id) ?? SCALES[0];
+/** Notes per octave of the key's scale (7, or 5 for the pentatonics). */
+export const scaleLength = (key: Key) => findScale(key.scale).steps.length;
 export const MIN_DEGREE = -7;
 export const MAX_DEGREE = 27;
 
-export function degreeToMidi(degree: number, octave = 0): number {
-    const o = Math.floor(degree / SCALE.length);
-    return ROOT + 12 * (o + octave) + SCALE[degree - o * SCALE.length];
+const mod = (n: number, m: number) => ((n % m) + m) % m;
+
+export function degreeToMidi(degree: number, octave: number, key: Key): number {
+    const steps = findScale(key.scale).steps;
+    const o = Math.floor(degree / steps.length);
+    return 36 + key.root + 12 * (o + octave) + steps[degree - o * steps.length];
 }
 
-const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-export const midiName = (midi: number) => `${NAMES[midi % 12]}${Math.floor(midi / 12) - 1}`;
-export const degreeName = (degree: number, octave = 0) => midiName(degreeToMidi(degree, octave));
+export const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+export const midiName = (midi: number) => `${NOTE_NAMES[mod(midi, 12)]}${Math.floor(midi / 12) - 1}`;
+export const degreeName = (degree: number, octave: number, key: Key) => midiName(degreeToMidi(degree, octave, key));
+export const keyName = (key: Key) => `${NOTE_NAMES[mod(key.root, 12)]} ${findScale(key.scale).name}`;
 
 // --- chords: pads 1–8 = triads on scale degrees 0..7, pads 9–16 = the same as seventh chords ---
 
 export const CHORDS = 16;
+export const VOICINGS = ['close', '1st inv', '2nd inv', 'open', 'sus2', 'sus4'] as const;
 
-/** Midi notes of chord 0..15 (stacked thirds in the scale). */
-export function chordNotes(chord: number, octave = 0): number[] {
-    const root = chord % 8;
-    const size = chord < 8 ? 3 : 4;
-    return Array.from({ length: size }, (_, i) => degreeToMidi(root + 2 * i, octave));
-}
-
-/** Root scale degree of a chord (for colors). */
+/** Root scale degree of a chord (for colors, transpose / follow). */
 export const chordRoot = (chord: number) => chord % 8;
 
+/** Scale degrees of a chord in root position (stacked thirds; sus2 / sus4 move the third). */
+function chordDegrees(chord: number, voicing: number): number[] {
+    const root = chordRoot(chord);
+    const degrees = chord < 8 ? [0, 2, 4] : [0, 2, 4, 6];
+    if (VOICINGS[voicing] === 'sus2') degrees[1] = 1;
+    if (VOICINGS[voicing] === 'sus4') degrees[1] = 3;
+    return degrees.map((d) => root + d);
+}
+
+/** Midi notes of chord 0..15 in the key, with the voicing (inversions move the lowest notes up an octave). */
+export function chordNotes(chord: number, octave: number, key: Key, voicing = 0): number[] {
+    const notes = chordDegrees(chord, voicing).map((d) => degreeToMidi(d, octave, key));
+    const v = VOICINGS[voicing];
+    if (v === '1st inv') notes[0] += 12;
+    if (v === '2nd inv') (notes[0] += 12), (notes[1] += 12);
+    if (v === 'open') notes[1] += 12;
+    return notes.sort((a, b) => a - b);
+}
+
 const QUALITY: Record<string, string> = {
-    '4,3': '', '3,4': 'm', '3,3': 'dim', '4,4': 'aug',
-    '4,3,4': 'maj7', '4,3,3': '7', '3,4,3': 'm7', '3,3,4': 'm7b5', '3,4,4': 'mMaj7',
+    '4,3': '', '3,4': 'm', '3,3': 'dim', '4,4': 'aug', '2,5': 'sus2', '5,2': 'sus4',
+    '4,3,4': 'maj7', '4,3,3': '7', '3,4,3': 'm7', '3,3,4': 'm7b5', '3,4,4': 'mMaj7', '4,4,3': 'maj7#5',
+    '2,5,3': '7sus2', '5,2,3': '7sus4', '2,5,4': 'maj7sus2', '5,2,4': 'maj7sus4',
 };
 
-/** E.g. "Am", "Fmaj7", "Bm7b5". */
-export function chordName(chord: number): string {
-    const notes = chordNotes(chord);
+/** E.g. "Am", "Fmaj7", "Bm7b5", "Am/C" (inversion). */
+export function chordName(chord: number, key: Key, voicing = 0): string {
+    const notes = chordDegrees(chord, voicing).map((d) => degreeToMidi(d, 0, key));
     const steps = notes.slice(1).map((n, i) => n - notes[i]).join(',');
-    return `${NAMES[notes[0] % 12]}${QUALITY[steps] ?? '?'}`;
+    const name = `${NOTE_NAMES[mod(notes[0], 12)]}${QUALITY[steps] ?? '*'}`;
+    const bass = chordNotes(chord, 0, key, voicing)[0];
+    return mod(bass, 12) === mod(notes[0], 12) ? name : `${name}/${NOTE_NAMES[mod(bass, 12)]}`;
 }
 
 // --- persistence (browser localStorage) ---
@@ -215,7 +268,11 @@ export function loadSong(): Song {
                     t.rate ??= 1;
                     t.length ??= STEPS;
                     t.midi ??= null;
+                    t.harmony ??= 'free';
+                    t.voicing ??= 0;
                 }
+                s.root ??= 9; // A minor was fixed before
+                s.scale ??= 'minor';
                 return s;
             }
         }

@@ -7,13 +7,19 @@ import {
     DRUMS,
     MAX_DEGREE,
     MIN_DEGREE,
+    HARMONY_MODES,
+    NOTE_NAMES,
+    QUICK_SCALES,
+    SCALES,
+    VOICINGS,
     chordName,
-    chordNotes,
     chordRoot,
     clonePattern,
-    degreeName,
-    degreeToMidi,
+    findScale,
     isEmptyPattern,
+    keyName,
+    midiName,
+    scaleLength,
     saveSong,
     type FxHit,
     type Song,
@@ -36,6 +42,8 @@ import { findInstrument, nextInstrument, type Voice } from '../../engine/instrum
 import { Pages, TAP_MS, type Cell, type Help, type Page } from './page';
 import { History } from './history';
 import { requestMidi } from '../../engine/midi';
+import { harmonyTrack, nextChordWeights, trackMidis } from './harmony';
+import { AUTO_BARS, Generator, type GenSettings } from './variation';
 
 export type { Cell, Help } from './page';
 
@@ -48,12 +56,14 @@ export interface TrackView {
     rate: number;
     length: number;
     midi: TrackMidi | null;
+    harmony: Track['harmony'];
+    voicing: number;
     /** Plays a random variation (STAR, not stored). */
     random: boolean;
 }
 
 /** Track settings, changed on the device (SELECT page) or on the app page (track list). */
-export type TrackSettings = Partial<Pick<Track, 'name' | 'kind' | 'octave' | 'rate' | 'length' | 'midi'>>;
+export type TrackSettings = Partial<Pick<Track, 'name' | 'kind' | 'octave' | 'rate' | 'length' | 'midi' | 'harmony' | 'voicing'>>;
 
 export interface MuOpView {
     /** Selected track 0..15. */
@@ -63,6 +73,12 @@ export interface MuOpView {
     drumSound: number;
     /** Value written by step taps on the selected notes / chords track (the last note / chord played). */
     pen: number;
+    /** The pen as a note / chord name (with the key and the current chord). */
+    penName: string;
+    /** Song key, e.g. "A minor". */
+    root: number;
+    scale: string;
+    keyName: string;
     playing: boolean;
     recording: boolean;
     metronome: boolean;
@@ -101,8 +117,10 @@ const EMPTY = 'empty';
 const HELP_TOP: Help[] = [
     { keys: 'Hold a lit button', text: 'Its page while held: pads / encoder / < > that do something are lit, the display shows the value. Release = back to playing' },
     { keys: 'PAD MODE / KEYBOARD / CHORDS', text: 'Shortcuts: drums track · bass ↔ lead · chords track' },
-    { keys: 'Pads', text: 'Play. Drums: pads 1–8 (selects the sound). Bass / lead: A minor scale over 16 pads. Chords: pads 1–8 triads (Am B° C Dm Em F G Am), 9–16 the same as 7th chords' },
+    { keys: 'Pads', text: 'Play. Drums: pads 1–8 (selects the sound). Notes: the scale of the song key over 16 pads (root = orange); with harmony "follow" the chord tones root / 3rd / 5th going up. Chords: pads 1–8 triads of the key, 9–16 the same as 7th chords; after a chord the likely next chords light brighter (last one = white)' },
+    { keys: 'Harmony', text: 'The first chords track leads (its chord holds until the next one). Notes tracks (SELECT page / track list): free = as written, transpose = shifted by the chord root, follow = values are chord tones' },
     { keys: 'STEP', text: 'Pads = 16 steps. Drums: tap toggles the selected sound. Notes / chords: tap writes the last played note / chord, tap again clears, hold + encoder changes it' },
+    { keys: 'STEP (hold)', text: 'Switches to the other view only while held (e.g. pick another drum sound on the play pads), release = back. A short press toggles' },
     { keys: 'PLAY / STOP / REC', text: 'Play/pause · stop and rewind · live recording into the nearest step while playing' },
     { keys: 'RESTART', text: 'Play from the start of the current pattern right away (a queued pattern / chain starts right away instead)' },
 ];
@@ -118,6 +136,10 @@ export class MuOpController {
     private seq: Sequencer;
     private pages: Pages;
     private history: History;
+    /** VARIATION: per track generator (settings + déjà vu loops), in memory. */
+    private generators = new Map<number, Generator>();
+    /** Bars played (for VARIATION auto). */
+    private bars = 0;
     /** SHIFT + Copy: one track's steps of a pattern. */
     private clipboard: { kind: TrackKind; steps: PatternTrack } | null = null;
     private metronome = new Metronome();
@@ -177,7 +199,14 @@ export class MuOpController {
     async run(signal: AbortSignal): Promise<void> {
         const offInput = this.m.input.onAny((e) => this.handle(e));
         const offMetronome = this.metronome.attach(this.seq.clock);
-        const offStep = this.seq.onStep((s) =>
+        const offStep = this.seq.onStep((s) => {
+            // VARIATION auto: at the last step of a bar, regenerate the next pattern of the tracks that want it
+            if (s.step === STEPS - 1) {
+                this.bars++;
+                for (const [track, g] of this.generators) {
+                    if (g.settings.auto && this.bars % g.settings.auto === 0) this.generate(track, this.seq.peekNextPattern(), false);
+                }
+            }
             this.seq.clock.at(s.time, () => {
                 this.step = s.step;
                 this.positions = s.positions;
@@ -186,8 +215,8 @@ export class MuOpController {
                     for (const pad of s.pads[this.track]) if (pad >= 0 && pad < 16) this.flash(pad, this.padColor(pad));
                 }
                 this.update();
-            }),
-        );
+            });
+        });
         this.say('μOp\nSELECT + pad: track');
         // instruments load in the background (Tone.js is fetched on first use); the pads play as soon as they're ready
         this.song.tracks.forEach((t, i) => {
@@ -239,10 +268,11 @@ export class MuOpController {
     }
 
     /** Selects a track (SELECT + pad, page). An empty track becomes a notes track with a random sound (kind: SELECT page). */
-    selectTrack(track: number): void {
+    selectTrack(track: number, announce = true): void {
         this.track = track;
         this.heldStep = null;
         const t = this.cur;
+        if (!announce && t.kind) return this.update();
         if (!t.kind) {
             this.setTrack(track, { kind: 'notes' });
             return this.say(`${this.label(track)}\nnew, random sound`);
@@ -259,6 +289,8 @@ export class MuOpController {
         Object.assign(t, patch);
         t.octave = clamp(Math.round(t.octave), -3, 3);
         t.length = clamp(Math.round(t.length), 1, STEPS);
+        t.voicing = clamp(Math.round(t.voicing), 0, VOICINGS.length - 1);
+        if (!HARMONY_MODES.includes(t.harmony)) t.harmony = 'free';
         if (!RATES.includes(t.rate as (typeof RATES)[number])) t.rate = 1;
         if (kindChanged && t.kind) {
             const defs = soundsFor(t.kind);
@@ -269,6 +301,14 @@ export class MuOpController {
             void this.setSound(track, t.sound, false);
         }
         if ('midi' in patch) this.sounds.setMidi(track, t.midi);
+        this.saveSoon();
+        this.update();
+    }
+
+    /** Song key (CHORDS page, SHIFT + Semitone, app page). Steps keep their scale degrees: the song moves along. */
+    setKey(patch: { root?: number; scale?: string }): void {
+        if (patch.root !== undefined) this.song.root = ((Math.round(patch.root) % 12) + 12) % 12;
+        if (patch.scale !== undefined) this.song.scale = findScale(patch.scale).id;
         this.saveSoon();
         this.update();
     }
@@ -318,6 +358,9 @@ export class MuOpController {
                     rate: RATES[clamp(RATES.indexOf(t.rate as (typeof RATES)[number]) + d, 0, RATES.length - 1)],
                 })),
                 setting('Length', 'length 1–16 steps', (t) => `${t.length} steps`, (t, d) => ({ length: t.length + d })),
+                setting('Harmony', 'harmony (notes tracks: free / transpose / follow the chords track)', (t) => (t.kind === 'notes' ? t.harmony : '–'), (t, d) =>
+                    t.kind === 'notes' ? { harmony: HARMONY_MODES[clamp(HARMONY_MODES.indexOf(t.harmony) + d, 0, HARMONY_MODES.length - 1)] } : null,
+                ),
             ],
             cells: () => c.song.tracks.map((t, i) => (i === c.track ? { color: 'white', level: 3 } : t.kind ? { color: trackColor(t), level: 1 } : OFF)),
             padDown: (pad) => c.selectTrack(pad),
@@ -492,6 +535,8 @@ export class MuOpController {
             hint: 'pad = function',
             modifier: true,
             buttons: ['tap'],
+            close: () => c.stripValue(null),
+            strip: (position) => c.liveDensity(position),
             cells: () => fns.map((f) => (f.run && f.available() ? { color: f.color, level: 1 } : OFF)),
             padDown: (pad) => {
                 const f = fns[pad];
@@ -507,6 +552,10 @@ export class MuOpController {
                 {
                     keys: 'SHIFT + pad 1–16',
                     text: 'Undo / Redo = a whole gesture (everything while something was held, or a recording pass); Step undo / redo = one edit. Nudge moves the track one step (STEP mode on drums: only the selected sound). Clear = the track in this pattern, Clear auto = the recorded FX. Copy / Paste = the track’s steps (into a track of the same kind). Octave = the track’s octave',
+                },
+                {
+                    keys: 'SHIFT + strip',
+                    text: 'Density of the selected track, live (orange bar): re-generates its pattern with déjà vu locked, so the same groove gets thinner ↔ busier. For breaks. A hand-made pattern gets replaced on the first move; undo with SHIFT + pad 1',
                 },
                 { keys: 'SHIFT + TAP', text: 'Metronome on/off (TAP blinks on the beat while on)' },
             ],
@@ -541,7 +590,117 @@ export class MuOpController {
             ],
         };
 
-        return [select, pattern, duplicate, erase, perform, tempo, swing, volume, search, shift];
+        /** A generator setting 0..1 of the selected track, in 5 % steps; `when` = for which kinds it matters. */
+        const gen = (name: string, help: string, key: Exclude<keyof GenSettings, 'auto'>, when: TrackKind[]) => ({
+            name,
+            help,
+            value: () => (c.cur.kind && when.includes(c.cur.kind) ? `${pct(c.generator(c.track).settings[key])}%` : '–'),
+            step: (d: number) => {
+                const g = c.generator(c.track).settings;
+                g[key] = clamp(Math.round((g[key] + d * 0.05) * 20) / 20, 0, 1);
+            },
+        });
+        const variation: Page = {
+            button: 'variation',
+            name: 'Variation',
+            params: [
+                gen('Density', 'density (how many hits / notes)', 'density', ['drums', 'notes', 'chords']),
+                gen('Deja vu', 'déjà vu: 0 = all new, ½ = the same again (turn the others to reshape it), 1 = shuffled (also the touch strip)', 'dejaVu', [
+                    'drums',
+                    'notes',
+                    'chords',
+                ]),
+                gen('Bias', 'bias (drums: straight ↔ busy offbeats; notes: low ↔ high)', 'bias', ['drums', 'notes']),
+                gen('Spread', 'spread (notes: range; chords: share of 7th chords)', 'spread', ['notes', 'chords']),
+                gen('Steps', 'steps (notes: any note ↔ only the root; chords: any move ↔ only the strongest)', 'steps', ['notes', 'chords']),
+                {
+                    name: 'Auto',
+                    help: 'auto: a new variation every 1 / 2 / 4 bars while playing (VARIATION lit)',
+                    value: () => {
+                        const n = c.generator(c.track).settings.auto;
+                        return n ? `every ${n} bar${n > 1 ? 's' : ''}` : 'off';
+                    },
+                    step: (d) => {
+                        const g = c.generator(c.track).settings;
+                        g.auto = AUTO_BARS[clamp(AUTO_BARS.indexOf(g.auto as (typeof AUTO_BARS)[number]) + Math.sign(d), 0, AUTO_BARS.length - 1)];
+                    },
+                },
+            ],
+            open: () => c.stripValue(c.generator(c.track).settings.dejaVu, 'violet'),
+            close: () => c.stripValue(null),
+            strip: (position) => {
+                if (!position) return;
+                const g = c.generator(c.track).settings;
+                g.dejaVu = Math.round(((position - 1) / (STRIP_MAX - 1)) * 20) / 20;
+                c.stripValue(g.dejaVu, 'violet');
+                c.say(`Variation\nDeja vu: ${pct(g.dejaVu)}%`);
+            },
+            apply: { name: 'Generate a variation into the current pattern (drums in STEP mode: only the selected sound)', run: () => c.generate(c.track) },
+            tap: { name: 'Generate a variation (same as push)', run: () => c.generate(c.track) },
+            help: [
+                {
+                    keys: 'VARIATION',
+                    text: 'Random patterns, Marbles style. Empty track or any track: makes a pattern from scratch. Déjà vu sets the depth: low = a lot changes, ½ = the same pattern (reshape it with density / bias / spread / steps), high = shuffled. Undo with SHIFT + pad 1',
+                },
+                { keys: 'VARIATION + strip', text: 'Déjà vu (the strip shows it in violet while VARIATION is held)' },
+            ],
+        };
+
+        /** The chords track the CHORDS page edits: the selected one, else the harmony track. */
+        const chordsTrack = () => (c.cur.kind === 'chords' ? c.track : harmonyTrack(c.song));
+        const chords: Page = {
+            button: 'chords',
+            name: 'Key',
+            // pressing CHORDS selects the chords track (as a shortcut), holding it shows the key page
+            open: () => c.selectKind('chords', false),
+            params: [
+                {
+                    name: 'Root',
+                    help: 'song root C…B (also SHIFT + pad 13 / 14)',
+                    value: () => NOTE_NAMES[c.song.root],
+                    step: (d) => c.setKey({ root: c.song.root + d }),
+                },
+                {
+                    name: 'Scale',
+                    help: 'scale (minor, major, modes, pentatonic)',
+                    value: () => findScale(c.song.scale).name,
+                    step: (d) => c.setKey({ scale: SCALES[clamp(SCALES.findIndex((x) => x.id === c.song.scale) + d, 0, SCALES.length - 1)].id }),
+                },
+                {
+                    name: 'Voicing',
+                    help: 'voicing of the chords track (close, 1st / 2nd inversion, open, sus2, sus4)',
+                    value: () => (chordsTrack() < 0 ? '–' : VOICINGS[c.song.tracks[chordsTrack()].voicing]),
+                    step: (d) => {
+                        const t = chordsTrack();
+                        if (t >= 0) c.setTrack(t, { voicing: c.song.tracks[t].voicing + d });
+                    },
+                },
+            ],
+            cells: () =>
+                Array.from({ length: 16 }, (_, i): Cell => {
+                    if (i < 12) return i === c.song.root ? { color: 'white', level: 3 } : { color: NOTE_NAMES[i].includes('#') ? 'violet' : 'blue', level: 1 };
+                    return QUICK_SCALES[i - 12] === c.song.scale ? { color: 'white', level: 3 } : { color: 'orange', level: 1 };
+                }),
+            padDown: (pad) => {
+                if (pad < 12) c.setKey({ root: pad });
+                else c.setKey({ scale: QUICK_SCALES[pad - 12] });
+                c.say(`Key\n${keyName(c.song)}`);
+                // let the key be heard: the tonic chord on the chords track
+                const t = chordsTrack();
+                if (t < 0) return;
+                const now = c.sounds.ctx.currentTime;
+                for (const midi of trackMidis(c.song.tracks[t], 0, null, c.song)) c.sounds.note(t, midi, now, 0.8, 0.5);
+            },
+            help: [
+                { keys: 'CHORDS', text: 'Press: select the chords track. Hold: the key page' },
+                {
+                    keys: 'CHORDS + pad',
+                    text: 'Pads 1–12 = song root C … B (current = white), 13–16 = scale minor / major / dorian / mixolydian. Plays the tonic chord. Steps keep their scale degrees, so the whole song moves to the new key',
+                },
+            ],
+        };
+
+        return [select, pattern, duplicate, erase, perform, tempo, swing, volume, search, chords, variation, shift];
     }
 
     // --- input ---
@@ -560,6 +719,12 @@ export class MuOpController {
                 break;
             case 'encoder':
                 this.encoder(e.delta);
+                break;
+            case 'buttonUp':
+                // STEP held (long or used): it was a temporary switch, back to the other view
+                if (e.button !== 'step' || (!e.chorded && e.duration < TAP_MS)) return;
+                this.stepMode = !this.stepMode;
+                this.say(this.stepMode ? `Steps\n${this.label(this.track)}` : 'Play pads');
                 break;
             case 'strip':
                 this.sounds.setFilter(e.position ? (e.position - 1) / (STRIP_MAX - 1) : null);
@@ -586,8 +751,6 @@ export class MuOpController {
             // shortcuts to the first track of a kind; KEYBOARD steps through the notes tracks (bass ↔ lead)
             case 'pad_mode':
                 return this.selectKind('drums');
-            case 'chords':
-                return this.selectKind('chords');
             case 'keyboard': {
                 const notes = this.song.tracks.flatMap((t, i) => (t.kind === 'notes' ? [i] : []));
                 if (notes.length) this.selectTrack(notes[(notes.indexOf(this.track) + 1) % notes.length]);
@@ -614,9 +777,9 @@ export class MuOpController {
         }
     }
 
-    private selectKind(kind: TrackKind): void {
+    private selectKind(kind: TrackKind, announce = true): void {
         const i = this.song.tracks.findIndex((t) => t.kind === kind);
-        if (i >= 0) this.selectTrack(i);
+        if (i >= 0) this.selectTrack(i, announce);
     }
 
     /** Pads when no page took them: play, or steps in STEP mode. */
@@ -731,6 +894,52 @@ export class MuOpController {
         this.saveSoon();
     }
 
+    // --- VARIATION ---
+
+    private generator(track: number): Generator {
+        let g = this.generators.get(track);
+        if (!g) this.generators.set(track, (g = new Generator()));
+        return g;
+    }
+
+    /** Writes a variation into `pattern` (drums in STEP mode: the selected sound only). */
+    private generate(track: number, pattern = this.seq.pattern, announce = true): void {
+        const t = this.song.tracks[track];
+        if (!t.kind) return;
+        const g = this.generator(track);
+        const one = t.kind === 'drums' && this.stepMode && track === this.track ? this.drumSound : undefined;
+        this.history.edit(pattern);
+        g.generate(t, this.song.patterns[pattern].tracks[track], this.song, one);
+        this.saveSoon();
+        if (announce) this.say(`Variation ${pct(g.settings.dejaVu)}%\n${one !== undefined ? DRUM_SOUNDS[one].name : this.label(track)}`);
+        this.update();
+    }
+
+    /** SHIFT + strip: the selected track's density, re-generated live with déjà vu locked (same pattern identity). */
+    private liveDensity(position: number): void {
+        if (!position) return this.stripValue(null);
+        if (!this.cur.kind) return this.say(`${this.label(this.track)}\n${EMPTY}`);
+        const g = this.generator(this.track).settings;
+        const density = Math.round(((position - 1) / (STRIP_MAX - 1)) * 20) / 20;
+        this.stripValue(density, 'orange');
+        if (density === g.density) return;
+        g.density = density;
+        const dejaVu = g.dejaVu;
+        g.dejaVu = 0.5;
+        try {
+            this.generate(this.track, this.seq.pattern, false);
+        } finally {
+            g.dejaVu = dejaVu;
+        }
+        this.say(`Density ${pct(density)}%\n${this.label(this.track)}`);
+    }
+
+    /** Strip LEDs as a bar 0..1 (null = off). */
+    private stripValue(v: number | null, color: Color = 'cyan'): void {
+        const lit = v === null ? -1 : Math.round(v * (STRIP_LEDS - 1));
+        for (let i = 0; i < STRIP_LEDS; i++) this.m.lights.strip(i, i <= lit ? color : 'off', i === lit ? 3 : 1);
+    }
+
     // --- SHIFT + pad functions ---
 
     /** The functions printed on the pads (index = pad). No `run` = not there yet. */
@@ -756,8 +965,8 @@ export class MuOpController {
             },
             { name: 'Copy', color: 'green', run: () => this.copyTrack(), available: hasKind },
             { name: 'Paste', color: 'green', run: () => this.pasteTrack(), available: () => !!this.clipboard && this.clipboard.kind === this.cur.kind },
-            later('Semitone -'),
-            later('Semitone +'),
+            { name: 'Semitone -', color: 'violet', run: () => this.semitone(-1), available: always },
+            { name: 'Semitone +', color: 'violet', run: () => this.semitone(1), available: always },
             { name: 'Octave -', color: 'blue', run: () => this.octave(-1), available: () => !!this.cur.kind && this.cur.kind !== 'drums' },
             { name: 'Octave +', color: 'blue', run: () => this.octave(1), available: () => !!this.cur.kind && this.cur.kind !== 'drums' },
         ];
@@ -823,6 +1032,12 @@ export class MuOpController {
         this.say(`Paste\n${this.label(this.track)} P${this.seq.pattern + 1}`);
     }
 
+    /** Song root one semitone down / up. */
+    private semitone(dir: 1 | -1): void {
+        this.setKey({ root: this.song.root + dir });
+        this.say(`Key\n${keyName(this.song)}`);
+    }
+
     private octave(dir: 1 | -1): void {
         const t = this.cur;
         this.setTrack(this.track, { octave: t.octave + dir });
@@ -831,14 +1046,26 @@ export class MuOpController {
 
     // --- notes / chords helpers ---
 
-    /** Midi notes of a value on the current track: a scale degree (notes) or a chord number (chords). */
+    /**
+     * The chord the notes tracks follow right now: while playing the harmony track's chord on the current step,
+     * stopped the last chord played on it (its pen).
+     */
+    private currentChord(): number | null {
+        if (this.seq.playing) return this.seq.chord;
+        const h = harmonyTrack(this.song);
+        return h < 0 ? null : this.pens[h];
+    }
+
+    /** Midi notes of a value on the current track: a scale degree / chord tone (notes) or a chord number (chords). */
     private midis(value: number): number[] {
-        const t = this.cur;
-        return t.kind === 'chords' ? chordNotes(value, t.octave) : [degreeToMidi(value, t.octave)];
+        return trackMidis(this.cur, value, this.currentChord(), this.song);
     }
 
     private valueName(value: number): string {
-        return this.cur.kind === 'chords' ? chordName(value) : degreeName(value, this.cur.octave);
+        const t = this.cur;
+        if (t.kind === 'chords') return chordName(value, this.song, t.voicing);
+        const midi = this.midis(value)[0];
+        return midi === undefined ? '–' : midiName(midi);
     }
 
     private preview(value: number): void {
@@ -902,8 +1129,15 @@ export class MuOpController {
             });
         }
         if (kind === 'drums') return all((i) => (i < DRUMS ? { color: DRUM_SOUNDS[i].color, level: i === this.drumSound ? 2 : 1 } : OFF));
-        if (kind === 'chords') return all((i) => ({ color: noteColor(chordRoot(i)), level: 1 }));
-        return all((i) => ({ color: i % 7 === 0 ? 'orange' : 'blue', level: 1 }));
+        if (kind === 'chords') {
+            // the last chord played = white, likely next chords brighter
+            const pen = this.pens[this.track];
+            const w = nextChordWeights(pen, this.song);
+            return all((i) => (i === pen ? { color: 'white', level: 2 } : { color: noteColor(chordRoot(i)), level: w[i] >= 0.85 ? 3 : w[i] >= 0.6 ? 2 : 1 }));
+        }
+        // the root pads orange: every scale octave, or every 3rd pad (root, 3rd, 5th) when following the chords
+        const n = this.cur.harmony === 'follow' ? 3 : scaleLength(this.song);
+        return all((i) => ({ color: i % n === 0 ? 'orange' : 'blue', level: 1 }));
     }
 
     /** Redraws the lights and notifies the page. */
@@ -928,7 +1162,7 @@ export class MuOpController {
             ['pad_mode', kind === 'drums' ? 4 : 1],
             ['keyboard', kind === 'notes' ? 4 : 1],
             ['chords', kind === 'chords' ? 4 : 1],
-            ['step', this.stepMode ? 4 : 1],
+            ['step', this.stepMode || input.isHeld('step') ? 4 : 1],
             ['play', this.seq.playing ? (beat ? 4 : 2) : 1],
             ['rec', this.recording ? 4 : 1],
             ['stop', 1],
@@ -936,6 +1170,7 @@ export class MuOpController {
             ['tap', this.metronome.enabled ? (beat ? 4 : 2) : 1],
             ['star', this.sounds.isRandom(this.track) ? 3 : input.isHeld('star') ? 4 : 1],
             ['perform', this.activeFx().length ? 3 : 1],
+            ['variation', this.generators.get(this.track)?.settings.auto ? 3 : 1],
         ]);
         const lit = this.pages.lights(levels, (b) => input.isHeld(b));
         for (const b of LED_BUTTONS) l.button(b, lit.get(b) ?? 0);
@@ -967,8 +1202,7 @@ export class MuOpController {
 
     /** Touch strip: filter amount as a bar. */
     private drawStrip(position: number): void {
-        const lit = position ? Math.round(((position - 1) / (STRIP_MAX - 1)) * (STRIP_LEDS - 1)) : -1;
-        for (let i = 0; i < STRIP_LEDS; i++) this.m.lights.strip(i, i <= lit ? 'cyan' : 'off', i === lit ? 3 : 1);
+        this.stripValue(position ? (position - 1) / (STRIP_MAX - 1) : null);
     }
 
     /** Display text (debounced: a frame costs ~80 ms on the wire). */
@@ -996,11 +1230,17 @@ export class MuOpController {
                 rate: t.rate,
                 length: t.length,
                 midi: t.midi,
+                harmony: t.harmony,
+                voicing: t.voicing,
                 random: this.sounds.isRandom(i),
             })),
             stepMode: this.stepMode,
             drumSound: this.drumSound,
             pen: this.pens[this.track],
+            penName: this.cur.kind && this.cur.kind !== 'drums' ? this.valueName(this.pens[this.track]) : '',
+            root: this.song.root,
+            scale: this.song.scale,
+            keyName: keyName(this.song),
             playing: this.seq.playing,
             recording: this.recording,
             metronome: this.metronome.enabled,

@@ -112,6 +112,18 @@ Nomikro ports it to TypeScript/WebHID for the browser, verifies the details agai
 
 Used as sound engine. Cool stuff.
 
+### Mutable Instruments Marbles
+
+μOp's VARIATION (random patterns with a "déjà vu" control that dials in how much a pattern changes) is inspired by
+[Marbles](https://pichenettes.github.io/mutable-instruments-documentation/modules/marbles/) by Émilie Gillet /
+Mutable Instruments ([source](https://github.com/pichenettes/eurorack), MIT). Own implementation for a step sequencer
+(`src/apps/muop/variation.ts`), no code copied. Mutable Instruments and Marbles are names of their respective owners.
+
+### Chorder
+
+The "likely next chord" suggestions in μOp follow the idea of Floyd Steinberg's
+[Chorder](https://www.floydsteinberg.com/extension/www.floydsteinberg.com/webmidi/chorder/chorder.html) (own implementation).
+
 ### claude
 
 The AI agent helped a bit to rewrite all of the python code and everything else.

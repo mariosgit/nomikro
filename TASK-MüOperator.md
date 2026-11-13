@@ -68,8 +68,8 @@ Do this refactor first, then move the existing modifiers onto it (PERFORM, SELEC
 | SELECT | tracks (select) | track settings: kind, octave, clock ×/÷, length, later harmony mode (name, MIDI out: app page) | – | – |
 | PATTERN | patterns (select / chain) | – | – | – |
 | PERFORM | FX 1–8 track, 9–16 mix | FX settings (later) | FX amount (sweep position, echo feedback) | – |
-| CHORDS (hold) | 12 roots + 4 scales | scale, voicing, inversion, octave | – | – |
-| VARIATION | playable | generator settings per track kind (density, spread, bias, length, …), target: pattern / sound | déjà vu (loop vs. change) | push = generate, short press = generate again |
+| CHORDS (hold) | 12 roots + 4 scales | root, scale, voicing | – | press = chords track |
+| VARIATION | playable | density, déjà vu, bias, spread, steps, auto | déjà vu | push / short press = generate |
 | PLUG-IN | playable (or drum sound select on drums) | sound parameters of the track (drum: per drum sound) | macro / morph | – |
 | Held step pad (STEP mode) | – | step: note / chord, velocity, length, p-locks (pitch, decay, sound params) | – | – |
 | MUTE / SOLO | tracks (drums track: drum sounds) | – | – | – |
@@ -117,6 +117,7 @@ Do this refactor first, then move the existing modifiers onto it (PERFORM, SELEC
   - 7 Nudge <, 8 Nudge >: rotate the current track one step (drums in STEP mode: the selected sound only).
   - 9 Clear (the current track in the pattern), 10 Clear Auto (the recorded FX of the pattern), 11 Copy, 12 Paste
     (the track's steps, into a track of the same kind; whole patterns: DUPLICATE).
+  - 13 Semitone −, 14 Semitone +: song root (part 4).
   - 15 Octave −, 16 Octave +: the track's octave (notes / chords).
 - [x] SHIFT + TAP = metronome. SHIFT + SEARCH / SHIFT + VOLUME dropped: covered by the SEARCH page (encoder browses,
   short press = next) and the VOLUME page (`< >` track / master).
@@ -135,39 +136,46 @@ tracks) has the same settings plus the ones that are only set there (name, MIDI 
 - [x] Track name: app page only.
 - [x] MIDI out per track: app page only (port + channel, `src/engine/midi.ts`). The track then plays on the external
   gear instead of the internal sound (sequencer + pads; drums = General MIDI drum notes 36, 38, 42, 46, 39, 45, 50, 56).
-- [ ] Harmony mode per notes track (free / transpose / follow): with part 4 (needs the chords track as harmony source).
+- [x] Harmony mode per notes track (free / transpose / follow): see part 4.
 
 ### 4. Key + harmony (CHORDS page, chords track)
-- [ ] Song key: root + scale (today fixed to A minor: `SCALE` / `ROOT` in `model.ts`). Pads, chords and generators follow.
-- [ ] Chords track = harmony source; transpose / follow on the notes tracks (harmony concept above).
-- [ ] More chord voicings (inversions, sus) as CHORDS page parameters.
-- [ ] Chord suggestions on the normal chords play view (no page needed): after a chord, the pads of likely next chords
-  light brighter. Idea from Floyd Steinberg's "Chorder"
-  (https://www.floydsteinberg.com/extension/www.floydsteinberg.com/webmidi/chorder/chorder.html, no license on its JS:
-  take the idea, write our own):
-  - next chords = weighted moves from the current root: V +7 (1.0), IV +5 (0.9), vi +9 (0.85), ii +2 (0.75),
-    vii° +11 (0.7), secondary dominant (0.65), iii +4 (0.6), color chords same root (0.5), chromatic ±1 dom7 (0.4).
-  - probable key = how many chords of the history fit each of the 24 keys; group suggestions into diatonic /
-    functional (secondary dominants) / related keys / chromatic.
-  - passing chord: dom7 a semitone below the target (or a tritone away before a dom7).
-  - secondary dominants / passing chords once chords outside the scale exist.
+- [x] Song key: root + scale (`model.ts` SCALES: minor, major, dorian, mixolydian, phrygian, lydian, harmonic minor,
+  pentatonic minor / major). CHORDS page: pads 1–12 = root, 13–16 = minor / major / dorian / mixolydian, `< >` + encoder
+  = root / scale / voicing. Also on the app page and SHIFT + pad 13 / 14 (semitone ∓). Steps keep their scale degrees.
+- [x] The first chords track is the harmony source (`harmony.ts`): its chord holds until the next one (wraps around its
+  length). Notes tracks: free / transpose (+ chord root, in the scale) / follow (values = chord tones root, 3rd, 5th, …).
+  SELECT page "Harmony" + track list. Live pads: while stopped, the last chord played on the chords track counts.
+- [x] Voicings per chords track: close, 1st / 2nd inversion, open, sus2, sus4 (CHORDS page, track list). Names: Am/C.
+- [x] Chord suggestions on the chords play view: the last chord = white, likely next chords brighter. Weights from
+  Floyd Steinberg's "Chorder" idea (https://www.floydsteinberg.com/extension/www.floydsteinberg.com/webmidi/chorder/chorder.html,
+  no license on its JS: own implementation): V +7 (1.0), IV +5 (0.9), vi +9 (0.85), ii +2 (0.75), vii° +11 (0.7),
+  iii +4 (0.6), same root (0.5); added for minor keys ♭VI +8, ♭VII +10 (0.8), ♭III +3 (0.7).
+- [ ] Later: probable key from the chord history (how many chords fit each of the 24 keys), suggestions grouped into
+  diatonic / functional (secondary dominants) / related keys / chromatic; passing chords (dom7 a semitone below the
+  target, or a tritone away before a dom7); chords outside the scale. Pentatonic "chords" are stacked scale steps
+  (quartal-ish, shown as e.g. "E*").
+- [ ] Random chord fill along the weights: VARIATION page (part 5).
 
 ### 5. VARIATION page (generators)
-- [ ] Hold VARIATION: `< >` + encoder = settings, strip = déjà vu, push = generate into the current pattern / track,
-  short press = generate again. Per track kind:
-  - drums: trigger generator à la Mutable Instruments **Grids**: a 2D map of drum patterns (X / Y = style),
-    per-voice density.
-  - notes: à la **Marbles**: random rhythm (density, bias, jitter) + random notes quantized to the scale
-    (spread, bias, steps), "déjà vu" = how much the random sequence loops vs. changes. Notes from the current chord
-    when the track follows the chords.
-  - chords: random progression along the chord suggestion weights.
-- [ ] Target "sound": a random variation of the track's sound (moves here from STAR).
-- Source: `../MI-Eurorack` (fork of pichenettes/eurorack). Licenses (checked in the README + file headers):
-  - Marbles (`marbles/random/`: `t_generator`, `x_y_generator`, `quantizer`, …): **MIT**, can be ported, keep the copyright notice.
-  - Grids (`grids/pattern_generator.cc`, `grids/resources.cc` = the pattern map): **GPL-3.0** (AVR project). Porting code
-    or the map data makes μOp GPL-3 (nomikro is LGPL-2.1). Alternative: own implementation of the idea (density
-    thresholds over a map of patterns) with our own pattern data.
-  - Trademark: don't use "Mutable Instruments" or the module names (Grids, Marbles) as names in the app.
+- [x] Marbles-style random patterns (`src/apps/muop/variation.ts`, own implementation, credits in the README).
+  Hold VARIATION: `< >` + encoder = Density, Déjà vu, Bias, Spread, Steps, Auto; strip = déjà vu (violet);
+  encoder push / short press = generate into the current pattern (from scratch on an empty track; drums in STEP mode:
+  only the selected sound). Undo: SHIFT + pad 1. Settings + déjà vu loops per track, in memory (not saved).
+  - Déjà vu: every track keeps a loop of random values per step and stream. 0 = all new, up to ½ = that share of
+    steps gets new values (variation depth), ½ = locked (the same pattern; density / bias / spread reshape it and keep
+    its identity), above ½ = steps replay other steps' values (shuffled).
+  - drums: hit probability per drum sound by position in the bar (kick downbeats, snare 2 + 4, hats 8ths, open hat
+    offbeats, toms / cowbell rare, more at the end of the bar), Bias = straight ↔ busy offbeats, velocity from accents.
+  - notes: rhythm by density (strong steps favored), pitch from a distribution (Spread = range, Bias = low ↔ high),
+    Steps = snap to the important notes (root > 5th > 3rd). Follow tracks get chord tones.
+  - chords: chords on strong beats, picked along the next-chord weights; Spread = share of 7th chords,
+    Steps = only the strongest moves.
+  - Auto: a new variation every 1 / 2 / 4 bars while playing (written into the next pattern; VARIATION lit).
+- [ ] Later: save the generator settings in the song; a "sound" target for VARIATION (vary the
+  track's sound with déjà vu; until then STAR gives a random sound, separate from VARIATION);
+  Grids-style drum map (own data, see the license note) if the Marbles-style drums aren't enough.
+- Source / licenses: `../MI-Eurorack` (fork of pichenettes/eurorack). Marbles (`marbles/random/`): **MIT**.
+  Grids: **GPL-3.0** (not used). Trademark: don't use "Mutable Instruments" or the module names as names in the app.
 
 ### 6. Step page (hold a step in STEP mode)
 - [ ] Note / chord value (works today with the encoder), velocity.
@@ -195,9 +203,39 @@ tracks) has the same settings plus the ones that are only set there (name, MIDI 
 ### 8. More
 - [ ] Later: SHIFT functions that need features first:
   - SHIFT + pad 5 Quantize, 6 Quantize 50 %: live-recorded hits (needs off-grid timing / micro offsets per step).
-  - SHIFT + pad 13 Semitone −, 14 Semitone +: song root (with the key setting, part 4).
   - SHIFT + button printed second functions: ERASE / Replace (record overwrites), REC / Count-In, RESTART / Loop,
     FOLLOW / Grid (quantize grid), DUPLICATE / Double (pattern length ×2, needs pattern length), MUTE / Choke,
     FIXED VEL / 16 Vel (pads = one sound at 16 velocities), NOTE REPEAT / Arp.
 - [ ] MUTE / SOLO + pad: per track (pads show the tracks like SELECT), per drum sound on a drums track.
 - [ ] PERFORM page: strip = FX amount, more track FX (octave up, random steps), per-track sends instead of the whole mix.
+
+
+### 9. Workflow
+
+- [x] step - the switching from step to drum/notes is combersome
+  - in addidtion to the switching, can we have a temporary.. step hold - switches over to the other view - let me do things (e.g. select another drum sound) - step release, switches back.
+  → done: STEP held (long or used with pads) = temporary switch, release = back; short press toggles as before.
+- variation is cool
+  - [x] the density is good for doing breaks, any way to quick access it ? Slider ? maybe shift+slider ?
+    → done: SHIFT + strip = density of the selected track, live (orange bar), re-generated with déjà vu locked.
+  - [ ] any way to generate a drop now and then ??? ideas ???
+    - "Drop" param on the VARIATION page: every 8 / 16 bars the bar before goes sparse (kick + hats only or
+      silence on the last beats), then the full pattern hits on the 1.
+    - Drop = a PERFORM FX recorded into a pattern (sweep / gate / tape stop on the last bar) and chained before the main one.
+    - Auto density curve: with Auto on, density walks down over n bars and snaps back (build-up / breakdown).
+
+### 10. Display
+
+- show the transport pos on the blank, move it over the disp to "burn" pixels evenly
+
+- in the App, the pad drawing could show more stuff. like the drum pad sound or the chord or the set note in the step view
+
+### 11 Web App page
+
+To the side of the pad display...
+
+- add a mixer view
+  - can the audio engine capture usb audio ? My ext synth does audio out via usb, could be mixed into the app. ??
+- add sound editor view - edit params for the sound on the selected track.
+- also during perform - the table of FX from the bottom could be in the help.
+
