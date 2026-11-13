@@ -49,8 +49,9 @@ Rules:
 - **Track buttons** (PAD MODE = drums, KEYBOARD = notes, CHORDS): pressing selects that track (on press, as today);
   holding it also shows that track kind's page.
 - **ERASE / DUPLICATE** are plain hold + pad modifiers (no parameters).
-- **SHIFT** is not a page: SHIFT + pad = the function printed on the pad, SHIFT + button = the button's printed
-  second function. SHIFT + pad keeps the pads silent; while SHIFT is held, the pads show the 16 functions dimmed.
+- **SHIFT** = what's printed: SHIFT + pad = the function printed on the pad, SHIFT + button = the button's printed
+  second function. (Built as a modifier page, so other pages win when held together.) A SHIFT combo that a page
+  covers (e.g. previous sound, master volume) is dropped. SHIFT + pad keeps the pads silent; while SHIFT is held, the pads show the 16 functions dimmed.
 - **Same gesture, meaning by track kind:** VARIATION, step editing, PLUG-IN do the fitting thing for drums / notes / chords.
 - Check on the device that every page button can be held with one hand while the other reaches `< >`, the encoder
   and the pads.
@@ -72,7 +73,9 @@ Do this refactor first, then move the existing modifiers onto it (PERFORM, SELEC
 | PLUG-IN | playable (or drum sound select on drums) | sound parameters of the track (drum: per drum sound) | macro / morph | – |
 | Held step pad (STEP mode) | – | step: note / chord, velocity, length, p-locks (pitch, decay, sound params) | – | – |
 | MUTE / SOLO | tracks (drums track: drum sounds) | – | – | – |
-| TEMPO / SWING / VOLUME | – | value (VOLUME: track, SHIFT = master) | – | TAP: tap tempo (later) |
+| TEMPO / SWING / VOLUME | – | value (VOLUME: `< >` track / master) | – | – |
+| SEARCH | playable | sound of the track | – | short press = next sound |
+| SHIFT (modifier) | the printed pad functions | – | – | – |
 
 ### Harmony concept
 
@@ -95,8 +98,8 @@ Do this refactor first, then move the existing modifiers onto it (PERFORM, SELEC
   (`src/engine/fx.ts` master bus: LP / HP sweep, gate, pump, echo, reverb, crush, slow down / tape stop).
   REC on while playing = recorded into the pattern (`Pattern.fx[step]`), ERASE + PERFORM (+ pad) clears.
 - [x] Sound engine per track: `src/engine/instruments/` (basic, Tone.js), page select or SEARCH, stored in the song per track.
-- [x] SEARCH = next sound for the current track (SHIFT = previous), STAR = random variation (temporary, not saved),
-  VOLUME + encoder = track volume (saved in the song), SHIFT + VOLUME = master. Engines take a `random` flag (`chooser()`).
+- [x] SEARCH = next sound for the current track, STAR = random variation (temporary, not saved),
+  VOLUME + encoder = track volume (saved in the song), master via `< >`. Engines take a `random` flag (`chooser()`).
 - [x] 16 tracks, SELECT + pad selects (pads show the tracks while held). Track kinds: drums / notes / chords.
   T1 Drums, T2 Bass (notes, octave -1, Sub lead), T3 Chords (Pad), T4 Lead; PAD MODE / KEYBOARD (bass ↔ lead) / CHORDS
   are shortcuts. Chords: pads 1–8 diatonic triads, 9–16 seventh chords (A minor). v1 songs migrate (drums → T1, melody → T4).
@@ -107,18 +110,17 @@ Do this refactor first, then move the existing modifiers onto it (PERFORM, SELEC
 - [x] Move PERFORM, SELECT, PATTERN, DUPLICATE, ERASE, TEMPO / SWING / VOLUME onto it (VOLUME: `< >` track / master).
 
 ### 2. SHIFT
-- [ ] SHIFT + pad = the functions printed on the pads:
-  - 1 Undo, 2 Redo, 3 Step Undo, 4 Step Redo: an undo history of song edits. Step undo = one edit, Undo = a whole
-    gesture / recording pass.
-  - 5 Quantize, 6 Quantize 50 %: live-recorded hits (needs off-grid timing / micro offsets per step first).
-  - 7 Nudge <, 8 Nudge >: shift the current track (or drum sound) one step left / right in the pattern (rotate).
-  - 9 Clear (the current track in the pattern), 10 Clear Auto (the recorded FX / p-locks), 11 Copy, 12 Paste
-    (track or pattern clipboard).
-  - 13 Semitone −, 14 Semitone +: song root; 15 Octave −, 16 Octave +: the track's octave.
-- [ ] SHIFT + button = printed second functions, where they make sense: ERASE / Replace (record overwrites),
-  REC / Count-In, RESTART / Loop, FOLLOW / Grid (quantize grid), DUPLICATE / Double (pattern length ×2), MUTE / Choke,
-  FIXED VEL / 16 Vel (pads = one sound at 16 velocities), NOTE REPEAT / Arp. Keep SHIFT + TAP = metronome,
-  SHIFT + SEARCH = previous sound, SHIFT + VOLUME = master.
+- [x] SHIFT + pad = the functions printed on the pads (SHIFT is a modifier page: pads silent, usable ones lit dim):
+  - 1 Undo, 2 Redo, 3 Step Undo, 4 Step Redo: undo history of pattern edits (`src/apps/muop/history.ts`, pattern
+    snapshots). Step = one edit, Undo = a whole gesture (while something is held / a recording pass).
+    Settings (tempo, volume, sound, octave) are not undone.
+  - 7 Nudge <, 8 Nudge >: rotate the current track one step (drums in STEP mode: the selected sound only).
+  - 9 Clear (the current track in the pattern), 10 Clear Auto (the recorded FX of the pattern), 11 Copy, 12 Paste
+    (the track's steps, into a track of the same kind; whole patterns: DUPLICATE).
+  - 15 Octave −, 16 Octave +: the track's octave (notes / chords).
+- [x] SHIFT + TAP = metronome. SHIFT + SEARCH / SHIFT + VOLUME dropped: covered by the SEARCH page (encoder browses,
+  short press = next) and the VOLUME page (`< >` track / master).
+- Later (needs features we don't have yet), see "Later: SHIFT functions" below.
 
 ### 3. SELECT page (track settings)
 - [ ] Fill empty tracks 5–16: kind + sound.
@@ -185,5 +187,11 @@ Do this refactor first, then move the existing modifiers onto it (PERFORM, SELEC
     wasm size (speech / wavetable data).
 
 ### 8. More
+- [ ] Later: SHIFT functions that need features first:
+  - SHIFT + pad 5 Quantize, 6 Quantize 50 %: live-recorded hits (needs off-grid timing / micro offsets per step).
+  - SHIFT + pad 13 Semitone −, 14 Semitone +: song root (with the key setting, part 4).
+  - SHIFT + button printed second functions: ERASE / Replace (record overwrites), REC / Count-In, RESTART / Loop,
+    FOLLOW / Grid (quantize grid), DUPLICATE / Double (pattern length ×2, needs pattern length), MUTE / Choke,
+    FIXED VEL / 16 Vel (pads = one sound at 16 velocities), NOTE REPEAT / Arp.
 - [ ] MUTE / SOLO + pad: per track (pads show the tracks like SELECT), per drum sound on a drums track.
 - [ ] PERFORM page: strip = FX amount, more track FX (octave up, random steps), per-track sends instead of the whole mix.

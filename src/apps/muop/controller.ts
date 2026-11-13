@@ -17,6 +17,7 @@ import {
     saveSong,
     type FxHit,
     type Song,
+    type PatternTrack,
     type Track,
     type TrackKind,
 } from './model';
@@ -27,6 +28,7 @@ import { Metronome } from '../../engine/metronome';
 import { DRUM_SOUNDS, soundsFor, type Sounds } from './sounds';
 import { findInstrument, nextInstrument, type Voice } from '../../engine/instruments';
 import { Pages, type Cell, type Help, type Page } from './page';
+import { History } from './history';
 
 export type { Cell, Help } from './page';
 
@@ -65,6 +67,8 @@ export interface MuOpView {
     message: string;
     /** Punch-in FX active now (held + recorded on the current step), names. */
     fx: string[];
+    /** The button held last (for the help on the page), null = none. */
+    held: LedButton | null;
 }
 
 type Layer = ReturnType<MaschineMikroMk3['lights']['layer']>;
@@ -85,11 +89,10 @@ const HELP_TOP: Help[] = [
     { keys: 'Pads', text: 'Play. Drums: pads 1–8 (selects the sound). Bass / lead: A minor scale over 16 pads. Chords: pads 1–8 triads (Am B° C Dm Em F G Am), 9–16 the same as 7th chords' },
     { keys: 'STEP', text: 'Pads = 16 steps. Drums: tap toggles the selected sound. Notes / chords: tap writes the last played note / chord, tap again clears, hold + encoder changes it' },
     { keys: 'PLAY / STOP / REC', text: 'Play/pause · stop and rewind · live recording into the nearest step while playing' },
+    { keys: 'RESTART', text: 'Play from the start of the current pattern right away (a queued pattern / chain starts right away instead)' },
 ];
 const HELP_BOTTOM: Help[] = [
     { keys: 'Touch strip', text: 'Low-pass filter while touched' },
-    { keys: 'SHIFT + TAP', text: 'Metronome on/off (TAP blinks on the beat while on)' },
-    { keys: 'SEARCH', text: 'Next sound for the current track (SHIFT + SEARCH: previous; also selectable in the track list)' },
     { keys: 'STAR', text: "Random variation of the current track's sound: temporary, not saved (STAR lit while active, SEARCH or a reload goes back)" },
     { keys: 'Button lights', text: 'Dim = usable, bright = active / held. While a page is held, only what it uses stays lit' },
 ];
@@ -99,6 +102,9 @@ export class MuOpController {
 
     private seq: Sequencer;
     private pages: Pages;
+    private history: History;
+    /** SHIFT + Copy: one track's steps of a pattern. */
+    private clipboard: { kind: TrackKind; steps: PatternTrack } | null = null;
     private metronome = new Metronome();
     private grid: Layer;
     private playhead: Layer;
@@ -132,6 +138,11 @@ export class MuOpController {
         private sounds: Sounds,
     ) {
         this.seq = new Sequencer(song, sounds);
+        this.history = new History(song);
+        this.seq.onEdit = (pattern) => {
+            this.history.edit(pattern);
+            this.saveSoon();
+        };
         this.pages = new Pages(MuOpController.definePages(this), (text) => this.say(text));
         this.grid = m.lights.layer('grid');
         this.playhead = m.lights.layer('playhead');
@@ -277,6 +288,7 @@ export class MuOpController {
             hint: 'pad = copy pattern to',
             cells: () => c.patternCells(),
             padDown: (pad) => {
+                c.history.edit(pad);
                 c.song.patterns[pad] = clonePattern(c.song.patterns[c.seq.pattern]);
                 c.saveSoon();
                 c.say(`Copy ${c.seq.pattern + 1} > ${pad + 1}`);
@@ -298,7 +310,8 @@ export class MuOpController {
             padDown: (pad) => {
                 const kind = c.cur.kind;
                 const steps = c.song.patterns[c.seq.pattern].tracks[c.track];
-                if (!kind) return;
+                if (!kind || (kind === 'drums' && pad >= DRUMS)) return;
+                c.history.edit(c.seq.pattern);
                 if (kind !== 'drums') {
                     steps.notes.fill(null);
                     c.say(`Erase\n${c.label(c.track)}`);
@@ -348,9 +361,6 @@ export class MuOpController {
         const volume: Page = {
             button: 'volume',
             name: 'Volume',
-            buttons: ['shift'],
-            // SHIFT + VOLUME starts on the master volume
-            open: () => (held('shift') ? 1 : 0),
             params: [
                 {
                     name: 'Track',
@@ -366,7 +376,7 @@ export class MuOpController {
                 },
                 {
                     name: 'Master',
-                    help: 'master volume (SHIFT + VOLUME starts here)',
+                    help: 'master volume',
                     value: () => pct(c.song.volume),
                     step: (d) => {
                         c.song.volume = clamp(Math.round((c.song.volume + d * 0.02) * 100) / 100, 0, 1);
@@ -377,6 +387,61 @@ export class MuOpController {
             ],
         };
 
+        const search: Page = {
+            button: 'search',
+            name: 'Sound',
+            params: [
+                {
+                    name: 'Sound',
+                    help: 'Browse the sounds of the current track (also selectable in the track list)',
+                    value: () => (c.cur.kind ? findInstrument(soundsFor(c.cur.kind), c.cur.sound).name : 'empty track'),
+                    step: (d) => {
+                        const kind = c.cur.kind;
+                        if (!kind) return;
+                        let id = c.cur.sound;
+                        for (let i = 0; i < Math.abs(d); i++) id = nextInstrument(soundsFor(kind), id, Math.sign(d)).id;
+                        void c.setSound(c.track, id, false);
+                    },
+                },
+            ],
+            tap: {
+                name: 'Next sound for the current track',
+                run: () => {
+                    const kind = c.cur.kind;
+                    if (!kind) return c.say(`${c.label(c.track)}\nempty`);
+                    void c.setSound(c.track, nextInstrument(soundsFor(kind), c.cur.sound, 1).id);
+                },
+            },
+        };
+
+        // via the prototype: `c` is null when building the cheat sheet (shiftFunctions only uses `this` in callbacks)
+        const fns = MuOpController.prototype.shiftFunctions.call(c);
+        const shift: Page = {
+            button: 'shift',
+            name: 'Shift',
+            hint: 'pad = function',
+            modifier: true,
+            buttons: ['tap'],
+            cells: () => fns.map((f) => (f.run && f.available() ? { color: f.color, level: 1 } : OFF)),
+            padDown: (pad) => {
+                const f = fns[pad];
+                if (!f.run || !f.available()) return c.say(`${f.name}\n${f.run ? 'nothing to do' : 'later'}`);
+                c.flash(pad, 'white');
+                f.run();
+            },
+            help: [
+                {
+                    keys: 'SHIFT + pad',
+                    text: `The functions printed on the pads (pads stay silent, usable ones lit): ${fns.map((f, i) => `${i + 1} ${f.name}${f.run ? '' : ' (later)'}`).join(' · ')}`,
+                },
+                {
+                    keys: 'SHIFT + pad 1–16',
+                    text: 'Undo / Redo = a whole gesture (everything while something was held, or a recording pass); Step undo / redo = one edit. Nudge moves the track one step (STEP mode on drums: only the selected sound). Clear = the track in this pattern, Clear auto = the recorded FX. Copy / Paste = the track’s steps (into a track of the same kind). Octave = the track’s octave',
+                },
+                { keys: 'SHIFT + TAP', text: 'Metronome on/off (TAP blinks on the beat while on)' },
+            ],
+        };
+
         const perform: Page = {
             button: 'perform',
             name: 'Perform FX',
@@ -384,6 +449,7 @@ export class MuOpController {
             buttons: ['erase', 'rec'],
             open: () => {
                 if (!held('erase')) return;
+                c.history.edit(c.seq.pattern);
                 for (const hits of c.song.patterns[c.seq.pattern].fx) hits.length = 0;
                 c.saveSoon();
                 c.say(`Erase FX\npattern ${c.seq.pattern + 1}`);
@@ -405,7 +471,7 @@ export class MuOpController {
             ],
         };
 
-        return [select, pattern, duplicate, erase, perform, tempo, swing, volume];
+        return [select, pattern, duplicate, erase, perform, tempo, swing, volume, search, shift];
     }
 
     // --- input ---
@@ -439,11 +505,9 @@ export class MuOpController {
         const seq = this.seq;
         const shift = this.m.input.isHeld('shift');
         const kind = this.cur.kind;
-        if (button === 'search' || button === 'star') {
+        if (button === 'star') {
             if (!kind) return this.say(`${this.label(this.track)}\nempty`);
-            if (button === 'star') return void this.setSound(this.track, this.cur.sound, true, true);
-            // next sound for the current track, SHIFT = previous
-            return void this.setSound(this.track, nextInstrument(soundsFor(kind), this.cur.sound, shift ? -1 : 1).id);
+            return void this.setSound(this.track, this.cur.sound, true, true);
         }
         if (button === 'tap' && shift) {
             return this.say(this.metronome.toggle() ? 'Metronome on' : 'Metronome off');
@@ -466,6 +530,9 @@ export class MuOpController {
                 if (seq.playing) seq.pause();
                 else seq.start();
                 return this.say(seq.playing ? `Play  pattern ${seq.pattern + 1}` : 'Pause');
+            case 'restart':
+                seq.restart();
+                return this.say(`Restart  pattern ${seq.pattern + 1}`);
             case 'stop':
                 seq.stop();
                 this.step = -1;
@@ -491,10 +558,12 @@ export class MuOpController {
         const now = this.sounds.ctx.currentTime;
         if (this.stepMode) {
             if (kind === 'drums') {
+                this.history.edit(this.seq.pattern);
                 const row = steps.drums[this.drumSound];
                 row[pad] = row[pad] > 0 ? 0 : 0.8;
                 if (row[pad]) this.sounds.drum(this.track, this.drumSound, now, 0.8);
             } else if (steps.notes[pad] === null) {
+                this.history.edit(this.seq.pattern);
                 steps.notes[pad] = this.pens[this.track];
                 this.preview(this.pens[this.track]);
                 this.heldStep = { pad, created: true, edited: false };
@@ -562,6 +631,7 @@ export class MuOpController {
         const held = this.heldStep;
         if (held?.pad === pad) {
             if (!held.created && !held.edited) {
+                this.history.edit(this.seq.pattern);
                 this.song.patterns[this.seq.pattern].tracks[this.track].notes[pad] = null;
                 this.saveSoon();
                 this.say(`Step ${pad + 1}\ncleared`);
@@ -577,7 +647,8 @@ export class MuOpController {
             const notes = this.song.patterns[this.seq.pattern].tracks[this.track].notes;
             const [lo, hi] = t.kind === 'chords' ? [0, CHORDS - 1] : [MIN_DEGREE, MAX_DEGREE];
             const value = clamp((notes[this.heldStep.pad] ?? this.pens[this.track]) + delta, lo, hi);
-            notes[this.heldStep.pad] = value;
+            this.history.edit(this.seq.pattern);
+            this.song.patterns[this.seq.pattern].tracks[this.track].notes[this.heldStep.pad] = value;
             this.pens[this.track] = value;
             this.heldStep.edited = true;
             this.preview(value);
@@ -586,6 +657,98 @@ export class MuOpController {
             return;
         }
         this.saveSoon();
+    }
+
+    // --- SHIFT + pad functions ---
+
+    /** The functions printed on the pads (index = pad). No `run` = not there yet. */
+    private shiftFunctions(): { name: string; color: Color; run?: () => void; available: () => boolean }[] {
+        const always = () => true;
+        const hasKind = () => !!this.cur.kind;
+        const later = (name: string) => ({ name, color: 'off' as Color, available: always });
+        return [
+            { name: 'Undo', color: 'orange', run: () => this.undo(false, false), available: () => this.history.canUndo },
+            { name: 'Redo', color: 'orange', run: () => this.undo(true, false), available: () => this.history.canRedo },
+            { name: 'Step undo', color: 'yellow', run: () => this.undo(false, true), available: () => this.history.canUndo },
+            { name: 'Step redo', color: 'yellow', run: () => this.undo(true, true), available: () => this.history.canRedo },
+            later('Quantize'),
+            later('Quantize 50%'),
+            { name: 'Nudge <', color: 'cyan', run: () => this.nudge(-1), available: hasKind },
+            { name: 'Nudge >', color: 'cyan', run: () => this.nudge(1), available: hasKind },
+            { name: 'Clear', color: 'red', run: () => this.clearTrack(), available: hasKind },
+            {
+                name: 'Clear auto',
+                color: 'red',
+                run: () => this.clearFx(),
+                available: () => this.song.patterns[this.seq.pattern].fx.some((hits) => hits.length > 0),
+            },
+            { name: 'Copy', color: 'green', run: () => this.copyTrack(), available: hasKind },
+            { name: 'Paste', color: 'green', run: () => this.pasteTrack(), available: () => !!this.clipboard && this.clipboard.kind === this.cur.kind },
+            later('Semitone -'),
+            later('Semitone +'),
+            { name: 'Octave -', color: 'blue', run: () => this.octave(-1), available: () => !!this.cur.kind && this.cur.kind !== 'drums' },
+            { name: 'Octave +', color: 'blue', run: () => this.octave(1), available: () => !!this.cur.kind && this.cur.kind !== 'drums' },
+        ];
+    }
+
+    /** Undo / redo: `step` = one edit, else the whole gesture. */
+    private undo(redo: boolean, step: boolean): void {
+        const n = redo ? this.history.redo(!step) : this.history.undo(!step);
+        const what = `${step ? 'Step ' : ''}${redo ? 'redo' : 'undo'}`;
+        this.heldStep = null;
+        this.saveSoon();
+        this.say(`${what[0].toUpperCase()}${what.slice(1)}\n${n === 1 ? '1 edit' : `${n} edits`}`);
+    }
+
+    /** Rotates the current track one step (drums in STEP mode: the selected sound only). */
+    private nudge(dir: 1 | -1): void {
+        const steps = this.song.patterns[this.seq.pattern].tracks[this.track];
+        const rotate = <T>(a: T[]) => (dir > 0 ? a.unshift(a.pop()!) : a.push(a.shift()!));
+        this.history.edit(this.seq.pattern);
+        const one = this.cur.kind === 'drums' && this.stepMode;
+        if (this.cur.kind === 'drums') {
+            if (one) rotate(steps.drums[this.drumSound]);
+            else steps.drums.forEach(rotate);
+        } else rotate(steps.notes);
+        this.saveSoon();
+        this.say(`Nudge ${dir > 0 ? '>' : '<'}\n${one ? DRUM_SOUNDS[this.drumSound].name : this.label(this.track)}`);
+    }
+
+    private clearTrack(): void {
+        const steps = this.song.patterns[this.seq.pattern].tracks[this.track];
+        this.history.edit(this.seq.pattern);
+        steps.notes.fill(null);
+        for (const row of steps.drums) row.fill(0);
+        this.saveSoon();
+        this.say(`Clear\n${this.label(this.track)}`);
+    }
+
+    private clearFx(): void {
+        this.history.edit(this.seq.pattern);
+        for (const hits of this.song.patterns[this.seq.pattern].fx) hits.length = 0;
+        this.saveSoon();
+        this.say(`Clear auto\nFX pattern ${this.seq.pattern + 1}`);
+    }
+
+    private copyTrack(): void {
+        const steps = this.song.patterns[this.seq.pattern].tracks[this.track];
+        this.clipboard = { kind: this.cur.kind!, steps: { drums: steps.drums.map((row) => [...row]), notes: [...steps.notes] } };
+        this.say(`Copy\n${this.label(this.track)} P${this.seq.pattern + 1}`);
+    }
+
+    private pasteTrack(): void {
+        const clip = this.clipboard!;
+        this.history.edit(this.seq.pattern);
+        this.song.patterns[this.seq.pattern].tracks[this.track] = { drums: clip.steps.drums.map((row) => [...row]), notes: [...clip.steps.notes] };
+        this.saveSoon();
+        this.say(`Paste\n${this.label(this.track)} P${this.seq.pattern + 1}`);
+    }
+
+    private octave(dir: 1 | -1): void {
+        const t = this.cur;
+        t.octave = clamp(t.octave + dir, -3, 3);
+        this.saveSoon();
+        this.say(`${this.label(this.track)}\noctave ${t.octave > 0 ? '+' : ''}${t.octave}`);
     }
 
     // --- notes / chords helpers ---
@@ -675,6 +838,7 @@ export class MuOpController {
         if (showHead) this.playhead.pad(this.step, 'white', 3);
         // the display stays on while a page button or a step is held, blanks 3 s after release
         this.m.screen.hold(!!this.pages.active || !!this.heldStep);
+        if (!this.recording && !this.m.input.heldButtons.length && !this.m.input.heldPads.length) this.history.close();
 
         // 1 = usable, more = a state; page buttons and the held page's view are applied by `pages.lights()`
         const input = this.m.input;
@@ -688,9 +852,8 @@ export class MuOpController {
             ['play', this.seq.playing ? (beat ? 4 : 2) : 1],
             ['rec', this.recording ? 4 : 1],
             ['stop', 1],
-            ['shift', input.isHeld('shift') ? 4 : 1],
+            ['restart', 1],
             ['tap', this.metronome.enabled ? (beat ? 4 : 2) : 1],
-            ['search', input.isHeld('search') ? 4 : 1],
             ['star', this.sounds.isRandom(this.track) ? 3 : input.isHeld('star') ? 4 : 1],
             ['perform', this.activeFx().length ? 3 : 1],
         ]);
@@ -760,6 +923,7 @@ export class MuOpController {
             step: this.step,
             cells,
             message: this.message,
+            held: (this.m.input.heldButtons.filter((b): b is LedButton => b !== 'enc-push' && b !== 'enc-touched').pop() ?? null),
             fx: this.activeFx().map((h) => `${FX[h.fx].name}${h.track !== undefined ? ` (T${h.track + 1})` : ''}`),
         };
     }

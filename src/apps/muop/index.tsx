@@ -8,12 +8,19 @@ import { MuOpController, trackColor, type Cell, type MuOpView } from './controll
 import { chordName, degreeName, loadSong } from './model';
 import { DRUM_SOUNDS, Sounds, soundsFor } from './sounds';
 import { FX } from './fx';
+import { buttonLabel, type Help as HelpRow } from './page';
 
 /** Pad numbers in screen order: top row first. Pad 0 = bottom left. */
 const PADS_TOP_DOWN = [12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3];
 
 /** Cheat sheet, generated from the controller's pages (same data as the device lights / display). */
 const CONTROLS = MuOpController.controls();
+
+/** Cheat sheet rows that mention a button, e.g. 'REC' → "PLAY / STOP / REC", "REC + PERFORM + pad". */
+function helpFor(button: string): HelpRow[] {
+    const word = new RegExp(`(^|[^A-Z-])${buttonLabel(button as never).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z-]|$)`);
+    return CONTROLS.filter((h) => word.test(h.keys));
+}
 
 const CSS: Record<Color, string> = {
     off: 'transparent', red: '#ef4444', orange: '#f97316', orange_light: '#fdba74', yellow_warm: '#fbbf24', yellow: '#facc15',
@@ -88,6 +95,7 @@ function MuOp({ maschine }: AppProps) {
                         <Stat k="Tempo" v={`${v.bpm} BPM · swing ${v.swing}% · master volume ${Math.round(v.volume * 100)}`} />
                         <Stat k="FX" v={v.fx.length ? v.fx.join(' · ') : '—'} />
                         <Stat k="Display" v={v.message.replace('\n', ' · ')} />
+                        {v.held && <HeldHelp button={v.held} />}
                     </dl>
                 ) : (
                     <p className="text-sm text-zinc-500 dark:text-zinc-400">Connect the device to play.</p>
@@ -143,7 +151,7 @@ function MuOp({ maschine }: AppProps) {
                 <h2 className="mb-2 font-semibold">Controls</h2>
                 <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
                     {CONTROLS.map((h) => (
-                        <Help key={h.keys} k={h.keys} v={h.text} />
+                        <Help key={h.keys} k={h.keys} v={h.text} active={!!v?.held && helpFor(v.held).includes(h)} />
                     ))}
                 </dl>
                 <h3 className="mt-4 mb-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">PERFORM pads (as on the device)</h3>
@@ -220,12 +228,31 @@ const Stat = ({ k, v }: { k: string; v: string }) => (
     </>
 );
 
-const Help = ({ k, v }: { k: string; v: string }) => (
+const Help = ({ k, v, active = false }: { k: string; v: string; active?: boolean }) => (
     <>
-        <dt className="font-mono text-xs whitespace-nowrap text-zinc-500 dark:text-zinc-400">{k}</dt>
-        <dd>{v}</dd>
+        <dt className={`font-mono text-xs whitespace-nowrap ${active ? 'font-semibold text-orange-600 dark:text-orange-400' : 'text-zinc-500 dark:text-zinc-400'}`}>{k}</dt>
+        <dd className={active ? 'font-medium text-orange-700 dark:text-orange-300' : undefined}>{v}</dd>
     </>
 );
+
+/** The help for the button held on the device (top panel, so it's visible without scrolling). */
+function HeldHelp({ button }: { button: string }) {
+    const rows = helpFor(button);
+    return (
+        <div className="col-span-2 mt-3 rounded-lg bg-orange-50 p-3 dark:bg-orange-950/40">
+            <div className="mb-1 text-xs font-medium text-orange-700 dark:text-orange-300">Holding {buttonLabel(button as never)}</div>
+            {rows.length ? (
+                <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+                    {rows.map((h) => (
+                        <Help key={h.keys} k={h.keys} v={h.text} />
+                    ))}
+                </dl>
+            ) : (
+                <p className="text-zinc-500 dark:text-zinc-400">Nothing mapped on this button yet.</p>
+            )}
+        </div>
+    );
+}
 
 export const muop: AppDef = {
     label: 'μOp',

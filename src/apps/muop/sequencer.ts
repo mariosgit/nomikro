@@ -44,6 +44,8 @@ export class Sequencer {
     readonly liveFx = new Map<string, FxHit>();
     /** Write held FX into the pattern (REC on). */
     recordFx = false;
+    /** Called before the sequencer changes a pattern (recording), for the undo history. */
+    onEdit: (pattern: number) => void = () => {};
     /** Running track FX, per track. */
     private trackFx = new Map<number, TrackFx>();
     private listeners = new Set<(s: PlayedStep) => void>();
@@ -93,6 +95,15 @@ export class Sequencer {
         this.applyPendingChain();
     }
 
+    /** Plays from step 1 of the current pattern, right now. A queued chain starts instead. Also starts when stopped. */
+    restart(): void {
+        this.clock.stop();
+        this.releaseFx();
+        this.applyPendingChain();
+        this.nextStep = 0;
+        this.start();
+    }
+
     /** New chain: immediately when stopped, at the next pattern start while playing. */
     setChain(chain: number[]): void {
         if (this.playing) this.pendingChain = [...chain];
@@ -120,6 +131,7 @@ export class Sequencer {
             if (step === 0) pattern = this.peekNextPattern();
             this.skip.add(this.key(pattern, step, target));
         }
+        this.onEdit(pattern);
         const t = this.song.patterns[pattern].tracks[target.track];
         if (target.sound !== undefined) t.drums[target.sound][step] = value;
         else t.notes[step] = value;
@@ -131,12 +143,14 @@ export class Sequencer {
         if (step === 0 && index !== this.clock.startIndex) this.advanceChain();
         this.nextStep = (step + 1) % STEPS;
         const pattern = this.pattern;
-        const p = this.song.patterns[pattern];
         const t = toAudioTime(time);
 
-        // punch-in FX: recorded on this step ∪ held live (later entries win for track FX)
-        if (this.recordFx) for (const hit of this.liveFx.values()) addFx(p.fx[step], hit);
-        const active = [...p.fx[step], ...this.liveFx.values()];
+        // punch-in FX (the pattern is looked up after onEdit: an undo snapshot replaces the object): recorded on this step ∪ held live (later entries win for track FX)
+        if (this.recordFx && this.liveFx.size) {
+            this.onEdit(pattern);
+            for (const hit of this.liveFx.values()) addFx(this.song.patterns[pattern].fx[step], hit);
+        }
+        const active = [...this.song.patterns[pattern].fx[step], ...this.liveFx.values()];
         this.applyFx(active, index, pattern, step, t, duration);
 
         const length = (duration * 0.85) / 1000;
