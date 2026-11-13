@@ -32,7 +32,16 @@ export interface Track {
     harmony: HarmonyMode;
     /** Chords tracks: index into VOICINGS. */
     voicing: number;
+    /** Mixer: muted = the sequencer skips it (sound and MIDI); solo = only the solo tracks play. Live pads still play. */
+    mute: boolean;
+    solo: boolean;
 }
+
+/** Does the sequencer play this track (mute / solo)? */
+export const audible = (song: Song, track: number) => {
+    const t = song.tracks[track];
+    return !t.mute && (t.solo || !song.tracks.some((x) => x.solo));
+};
 
 /**
  * free = plays the scale degrees as written; transpose = shifted by the current chord's root (stays in the scale);
@@ -98,7 +107,7 @@ export interface Song {
 
 export type Key = Pick<Song, 'root' | 'scale'>;
 
-const TRACK_DEFAULTS = { rate: 1, length: STEPS, midi: null, harmony: 'free', voicing: 0 } as const;
+const TRACK_DEFAULTS = { rate: 1, length: STEPS, midi: null, harmony: 'free', voicing: 0, mute: false, solo: false } as const;
 const emptyTrack = (n: number): Track => ({ kind: null, name: `Track ${n + 1}`, sound: '', params: {}, level: 1, octave: 0, ...TRACK_DEFAULTS });
 
 /** Tracks 1–4 of a new song. */
@@ -285,6 +294,8 @@ export function loadSong(): Song {
                     t.harmony ??= 'free';
                     t.voicing ??= 0;
                     t.params ??= {}; // saved before sound parameters
+                    t.mute ??= false; // saved before the mixer
+                    t.solo ??= false;
                 }
                 s.root ??= 9; // A minor was fixed before
                 s.scale ??= 'minor';

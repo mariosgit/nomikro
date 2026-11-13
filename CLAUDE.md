@@ -30,11 +30,11 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
   - `muop/` μOp, PO-style groovebox, 16 tracks (kinds drums / notes / chords), SELECT + pad selects (`model.ts` song data,
     chords, v1 → v2 migration, localStorage, `sounds.ts` mixer: instrument per track + strip filter + FX bus + volume,
     `sequencer.ts` chain playback + quantized recording + punch-in FX, `fx.ts` PERFORM FX table + track step remapping, `history.ts` undo history (pattern snapshots, gestures), `harmony.ts` key / chords track as harmony source (free / transpose / follow, chord suggestions), `variation.ts` VARIATION generator (Marbles-style déjà vu loops), `favorites.ts` STAR favorites + sound browser list, `page.ts` hold-a-button pages (`Pages`: routing of pads / `< >` / encoder / strip,
-    button lights, display, generated cheat sheet), `controller.ts` input mapping / lights / display + the page definitions, `index.tsx` page).
+    button lights, display, generated cheat sheet), `controller.ts` input mapping / lights / display + the page definitions, `index.tsx` page, `panel.tsx` its right panel: mixer / sound editor / inputs / FX / help, `inputs.ts` audio inputs of this computer).
     Display messages go to the dev log (`event` with `app: 'muop'`).
 - `src/engine/` framework-free music engine: `clock.ts` (lookahead scheduler, worker tick, timebase performance.now() ms,
   `onStep` → `{index, time, duration}`, `at(time, fn)` for lights), `audio.ts` (shared AudioContext, `toAudioTime()`,
-  unlocked on the first click on the page: pad presses don't count as a user gesture), `metronome.ts`, `midi.ts` (Web MIDI out: ports, timed notes; access requested on demand), `fx.ts` (master FX bus for punch-ins: sweeps, gate, pump, echo, reverb, crush, tape stop),
+  unlocked on the first click on the page: pad presses don't count as a user gesture), `metronome.ts`, `midi.ts` (Web MIDI out: ports, timed notes; access requested on demand), `input.ts` (audio inputs via getUserMedia, voice processing off), `fx.ts` (master FX bus for punch-ins: sweeps, gate, pump, echo, reverb, crush, tape stop),
   `instruments/` (sound engines, chosen per track by id: `types.ts` `DrumKit` / `Melodic` contract + `DRUM_ROLES` + `ParamDef` parameters (values per track, live `set()`),
   `basic.ts` plain Web Audio, `tone.ts` Tone.js on our AudioContext, loaded on demand; registry `DRUM_KITS` / `MELODIC` in `index.ts`)
 - `src/dev/devlog.ts` dev-only logging to the dev server

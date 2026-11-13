@@ -16,6 +16,9 @@ export class Screen {
     blankAfter = 3000;
     private blanktimer: number | null = null;
     private held = false;
+    /** Blanked (no message up): the idle text shows instead, if any. */
+    private blanked = true;
+    private idleText: { text: string; x: number; y: number; size: number } | null = null;
 
     // Single writer: one frame in flight, only the latest pending frame is kept.
     private sent: Uint8Array | null = null;
@@ -25,9 +28,20 @@ export class Screen {
     constructor(private send: SendReport) {}
 
     set(text: string, size: number = 14): Promise<void> {
+        this.blanked = false;
         const done = this.show(this.getBuffer(this.getBitImg(text, size)));
         this.armBlank();
         return done;
+    }
+
+    /**
+     * Small text shown while the display is blanked (e.g. the transport position while playing), at x / y (baseline,
+     * pixels). Move it around now and then so the aged OLED wears evenly. null = plain blank.
+     * Each change costs a frame (~80 ms on the wire): update it at most a few times per second.
+     */
+    idle(text: string | null, x = 0, y = 10, size = 10): void {
+        this.idleText = text === null ? null : { text, x, y, size };
+        if (this.blanked) void this.clear();
     }
 
     /**
@@ -48,13 +62,17 @@ export class Screen {
         if (this.blankAfter > 0 && !this.held) {
             this.blanktimer = window.setTimeout(() => {
                 this.blanktimer = null;
-                this.clear();
+                this.blanked = true;
+                void this.clear();
             }, this.blankAfter);
         }
     }
 
+    /** Blank (or the idle text, see idle()). */
     clear(): Promise<void> {
-        return this.show(BLANK);
+        this.blanked = true;
+        const idle = this.idleText;
+        return this.show(idle ? this.getBuffer(this.getBitImg(idle.text, idle.size, idle.x, idle.y)) : BLANK);
     }
 
     /** Queues a frame; skipped if it equals the latest frame already sent or queued. */
@@ -91,7 +109,8 @@ export class Screen {
         await this.send(REPORT_ID, lo);
     }
 
-    private getBitImg(text: string, size: number): ImageData {
+    /** One or two lines at the top / bottom; or with x / y: a single line at that baseline. */
+    private getBitImg(text: string, size: number, x?: number, y?: number): ImageData {
         const canvas = document.createElement('canvas');
         canvas.width = 128;
         canvas.height = 32;
@@ -101,6 +120,10 @@ export class Screen {
         ctx.fillStyle = 'white';
         ctx.font = `${size}px monospace`;
         const lines = text.split('\n');
+        if (x !== undefined && y !== undefined) {
+            ctx.fillText(lines[0] || '', x, y);
+            return ctx.getImageData(0, 0, 128, 32);
+        }
         ctx.fillText(lines[0] || '', 0, 16);
         ctx.fillText(lines[1] || '', 0, 32);
         return ctx.getImageData(0, 0, 128, 32);

@@ -1,5 +1,5 @@
 // μOp: a small PO-style groovebox. 16 tracks (drums, bass, chords, lead, …), 16 patterns, chains. Played on the device.
-import React, { useEffect, useReducer, useState } from 'react';
+import React, { useEffect, useReducer, useRef, useState } from 'react';
 import type { Color } from '../../maschine';
 import { audioContext, audioRunning } from '../../engine/audio';
 import { useDeviceTask } from '../../shell/device';
@@ -11,9 +11,7 @@ import { DRUM_SOUNDS, Sounds, soundsFor } from './sounds';
 import { favoriteOf, indexIn, soundList } from './favorites';
 import { FX } from './fx';
 import { buttonLabel, type Help as HelpRow } from './page';
-
-/** Pad numbers in screen order: top row first. Pad 0 = bottom left. */
-const PADS_TOP_DOWN = [12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3];
+import { CSS, FxTable, PADS_TOP_DOWN, Panel, meterX, useLongHeld } from './panel';
 
 /** Cheat sheet, generated from the controller's pages (same data as the device lights / display). */
 const CONTROLS = MuOpController.controls();
@@ -23,12 +21,6 @@ function helpFor(button: string): HelpRow[] {
     const word = new RegExp(`(^|[^A-Z-])${buttonLabel(button as never).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z-]|$)`);
     return CONTROLS.filter((h) => word.test(h.keys));
 }
-
-const CSS: Record<Color, string> = {
-    off: 'transparent', red: '#ef4444', orange: '#f97316', orange_light: '#fdba74', yellow_warm: '#fbbf24', yellow: '#facc15',
-    lime: '#a3e635', green: '#22c55e', mint: '#6ee7b7', cyan: '#22d3ee', turquoise: '#2dd4bf', blue: '#3b82f6', plum: '#c084fc',
-    violet: '#8b5cf6', purple: '#a855f7', magenta: '#d946ef', fuchsia: '#ec4899', white: '#f4f4f5',
-};
 
 function useAudioRunning(): boolean {
     const [running, setRunning] = useState(audioRunning());
@@ -64,6 +56,14 @@ function MuOp({ maschine }: AppProps) {
     useEffect(() => ctl?.subscribe(rerender), [ctl]);
 
     const v = ctl?.view;
+    const held = useLongHeld(v?.held ?? null);
+    const pads = (
+        <div className="grid w-64 shrink-0 grid-cols-4 gap-2 self-start">
+            {PADS_TOP_DOWN.map((n) => (
+                <PadCell key={n} cell={v?.cells[n]} label={n + 1} text={v?.labels[n] ?? ''} />
+            ))}
+        </div>
+    );
     return (
         <div className="space-y-4">
             {!audio && (
@@ -75,49 +75,35 @@ function MuOp({ maschine }: AppProps) {
                 </button>
             )}
 
-            <section className="flex flex-wrap gap-6 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-                <div className="grid w-56 shrink-0 grid-cols-4 gap-2 self-start">
-                    {PADS_TOP_DOWN.map((n) => (
-                        <PadCell key={n} cell={v?.cells[n]} label={n + 1} />
-                    ))}
-                </div>
-                {v ? (
-                    <dl className="grid flex-1 grid-cols-[auto_1fr] content-start gap-x-4 gap-y-1 text-sm">
+            {v && ctl && <StatusBar v={v} ctl={ctl} />}
+
+            <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                {v && ctl ? (
+                    <Panel
+                        v={v}
+                        ctl={ctl}
+                        pads={pads}
+                        SoundSelect={SoundSelect}
+                        help={v.held ? <HeldHelp button={v.held} /> : null}
+                        info={
+                    <dl className="grid grid-cols-[auto_1fr] content-start gap-x-4 gap-y-1 text-sm">
                         <Stat k="Track" v={trackSummary(v)} />
                         <Stat k="Pads" v={v.stepMode ? 'Steps (STEP)' : 'Play'} />
-                        <Stat
-                            k="Transport"
-                            v={`${v.playing ? '▶ playing' : '■ stopped'}${v.recording ? ' · ● rec' : ''}${v.metronome ? ' · metronome' : ''}${v.step >= 0 ? ` · step ${v.step + 1}` : ''}`}
-                        />
-                        <dt className="text-zinc-500 dark:text-zinc-400">Key</dt>
-                        <dd>
-                            <select value={v.root} onChange={(e) => ctl!.setKey({ root: Number(e.target.value) })} className={SELECT}>
-                                {NOTE_NAMES.map((n, i) => (
-                                    <option key={n} value={i} className="text-zinc-900">
-                                        {n}
-                                    </option>
-                                ))}
-                            </select>{' '}
-                            <select value={v.scale} onChange={(e) => ctl!.setKey({ scale: e.target.value })} className={SELECT}>
-                                {SCALES.map((sc) => (
-                                    <option key={sc.id} value={sc.id} className="text-zinc-900">
-                                        {sc.name}
-                                    </option>
-                                ))}
-                            </select>
-                        </dd>
                         <Stat k="Pattern" v={String(v.pattern + 1)} />
                         <Stat
                             k="Chain"
                             v={`${v.chain.map((p) => p + 1).join(' ')}${v.pendingChain ? ` → next ${v.pendingChain.map((p) => p + 1).join(' ')}` : ''}`}
                         />
-                        <Stat k="Tempo" v={`${v.bpm} BPM · swing ${v.swing}% · master volume ${Math.round(v.volume * 100)}`} />
                         <Stat k="FX" v={v.fx.length ? v.fx.join(' · ') : '—'} />
                         <Stat k="Display" v={v.message.replace('\n', ' · ')} />
-                        {v.held && <HeldHelp button={v.held} />}
                     </dl>
+                        }
+                    />
                 ) : (
-                    <p className="text-sm text-zinc-500 dark:text-zinc-400">Connect the device to play.</p>
+                    <div className="flex flex-wrap gap-6">
+                        {pads}
+                        <p className="text-sm text-zinc-500 dark:text-zinc-400">Connect the device to play.</p>
+                    </div>
                 )}
             </section>
 
@@ -127,26 +113,103 @@ function MuOp({ maschine }: AppProps) {
                 <h2 className="mb-2 font-semibold">Controls</h2>
                 <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
                     {CONTROLS.map((h) => (
-                        <Help key={h.keys} k={h.keys} v={h.text} active={!!v?.held && helpFor(v.held).includes(h)} />
+                        <Help key={h.keys} k={h.keys} v={h.text} active={!!held && helpFor(held).includes(h)} />
                     ))}
                 </dl>
                 <h3 className="mt-4 mb-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">PERFORM pads (as on the device)</h3>
-                <div className="grid max-w-md grid-cols-4 gap-1.5">
-                    {PADS_TOP_DOWN.map((pad) => (
-                        <div key={pad} className="rounded-md border-l-4 bg-zinc-100 px-2 py-1 text-xs dark:bg-zinc-800" style={{ borderColor: CSS[FX[pad].color] }}>
-                            <span className="text-zinc-500 dark:text-zinc-400">{pad + 1}</span> {FX[pad].name}
-                        </div>
-                    ))}
-                </div>
-                <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                    1–8 selected track: loops repeat the last 1/2/4/8 steps, retrig repeats the step 2×/3×, reverse plays backwards, half time stretches. 9–16 mix: filter sweeps over a bar, gate chops 1/16, pump ducks every beat, echo is dotted 1/8, slow down = tape stop.
-                </p>
+                <FxTable />
             </section>
         </div>
     );
 }
 
-function PadCell({ cell, label }: { cell: Cell | undefined; label: number }) {
+/** Top bar: transport, tempo, key, position, cycle, master level. */
+function StatusBar({ v, ctl }: { v: MuOpView; ctl: MuOpController }) {
+    const bars = v.cycle / STEPS;
+    const tick = v.tick;
+    return (
+        <section className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-zinc-200 bg-white px-5 py-2.5 text-sm shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+            <span className="font-medium tabular-nums">
+                {v.playing ? <span className="text-green-600 dark:text-green-400">▶</span> : <span className="text-zinc-400">■</span>}
+                {v.recording && <span className="ml-1.5 text-red-500">● rec</span>}
+                {v.metronome && <span className="ml-1.5 text-zinc-500 dark:text-zinc-400">metro</span>}
+            </span>
+            <span className="tabular-nums" title="Song position: pattern · bar.beat since play">
+                P{v.pattern + 1} · {tick >= 0 ? `${Math.floor(tick / STEPS) + 1}.${Math.floor((tick % STEPS) / 4) + 1}` : '–'}
+            </span>
+            <span
+                className="text-zinc-500 tabular-nums dark:text-zinc-400"
+                title="All tracks (lengths, clocks) line up again after this many bars (polymeter cycle)"
+            >
+                cycle {tick >= 0 ? Math.floor((tick % v.cycle) / STEPS) + 1 : '–'} / {bars} {bars === 1 ? 'bar' : 'bars'}
+            </span>
+            <span className="tabular-nums">
+                {v.bpm} BPM <span className="text-zinc-500 dark:text-zinc-400">· swing {v.swing}%</span>
+            </span>
+            <span className="inline-flex items-center gap-1">
+                <span className="text-zinc-500 dark:text-zinc-400">Key</span>
+                <select value={v.root} onChange={(e) => ctl.setKey({ root: Number(e.target.value) })} className={SELECT}>
+                    {NOTE_NAMES.map((n, i) => (
+                        <option key={n} value={i} className="text-zinc-900">
+                            {n}
+                        </option>
+                    ))}
+                </select>
+                <select value={v.scale} onChange={(e) => ctl.setKey({ scale: e.target.value })} className={SELECT}>
+                    {SCALES.map((sc) => (
+                        <option key={sc.id} value={sc.id} className="text-zinc-900">
+                            {sc.name}
+                        </option>
+                    ))}
+                </select>
+            </span>
+            <Meter ctl={ctl} volume={v.volume} />
+        </section>
+    );
+}
+
+const OVER_CLASS = 'rounded px-1.5 text-xs font-bold';
+
+/**
+ * Master level: bar (green → yellow → red), falling peak marker, "OVER" in red after clipping (crackles).
+ * Updated per animation frame straight in the DOM (no React render per frame).
+ */
+function Meter({ ctl, volume }: { ctl: MuOpController; volume: number }) {
+    const bar = useRef<HTMLDivElement>(null);
+    const hold = useRef<HTMLDivElement>(null);
+    const over = useRef<HTMLSpanElement>(null);
+    useEffect(() => {
+        let raf = 0;
+        const frame = () => {
+            const m = ctl.meter();
+            if (bar.current) bar.current.style.width = `${meterX(m.peak) * 100}%`;
+            if (hold.current) hold.current.style.left = `calc(${meterX(m.hold) * 100}% - 1px)`;
+            if (over.current) over.current.className = `${OVER_CLASS} ${m.over ? 'bg-red-500 text-white' : 'bg-zinc-200 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500'}`;
+            raf = requestAnimationFrame(frame);
+        };
+        raf = requestAnimationFrame(frame);
+        return () => cancelAnimationFrame(raf);
+    }, [ctl]);
+    return (
+        <span className="ml-auto inline-flex items-center gap-2" title={`Master level (−48 … 0 dB). OVER = clipping: lower the volume / Drive`}>
+            <span className="text-xs text-zinc-500 tabular-nums dark:text-zinc-400">vol {Math.round(volume * 100)}</span>
+            <span className="relative h-2.5 w-40 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+                {/* the color scale spans the whole meter (green, yellow from -6 dB, red at the top), the fill shows its part */}
+                <div
+                    ref={bar}
+                    className="absolute inset-y-0 left-0"
+                    style={{ width: 0, backgroundImage: 'linear-gradient(to right, #22c55e 80%, #facc15 88%, #ef4444 98%)', backgroundSize: '10rem 100%' }}
+                />
+                <div ref={hold} className="absolute inset-y-0 w-0.5 bg-zinc-700 dark:bg-zinc-200" style={{ left: 0 }} />
+            </span>
+            <span ref={over} className={`${OVER_CLASS} bg-zinc-200 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500`}>
+                OVER
+            </span>
+        </span>
+    );
+}
+
+function PadCell({ cell, label, text }: { cell: Cell | undefined; label: number; text: string }) {
     const color = cell && cell.level > 0 ? CSS[cell.color] : undefined;
     return (
         <div
@@ -154,6 +217,11 @@ function PadCell({ cell, label }: { cell: Cell | undefined; label: number }) {
             style={color ? { backgroundColor: color, opacity: 0.35 + 0.65 * (cell!.level / 3) } : undefined}
         >
             <span className="absolute top-0.5 left-1 text-[10px] text-zinc-500 mix-blend-difference">{label}</span>
+            {text && (
+                <span className="absolute inset-x-0.5 bottom-0.5 truncate text-center text-[10px] leading-tight font-medium text-zinc-900 dark:text-zinc-100" title={text}>
+                    {text}
+                </span>
+            )}
         </div>
     );
 }

@@ -16,6 +16,7 @@ import {
     chordRoot,
     clonePattern,
     clonePatternTrack,
+    audible,
     MAX_LENGTH,
     findScale,
     isEmptyPattern,
@@ -44,6 +45,7 @@ import { findInstrument, formatParam, randomParam, stepParam, type ParamDef, typ
 import { Pages, TAP_MS, type Cell, type Help, type Page, type Param } from './page';
 import { addFavorite, favoriteOf, favorites, indexIn, removeFavorite, soundList, type SoundEntry } from './favorites';
 import { History } from './history';
+import { Inputs } from './inputs';
 import { requestMidi } from '../../engine/midi';
 import { harmonyTrack, nextChordWeights, trackMidis } from './harmony';
 import { AUTO_BARS, Generator, type GenSettings } from './variation';
@@ -61,6 +63,10 @@ export interface TrackView {
     midi: TrackMidi | null;
     harmony: Track['harmony'];
     voicing: number;
+    mute: boolean;
+    solo: boolean;
+    /** Played by the sequencer (not muted, no other track soloed). */
+    audible: boolean;
     /** The favorite (STAR) this track's sound is, null = none. */
     favorite: string | null;
     /** The sound's parameter values (missing = default). */
@@ -68,7 +74,7 @@ export interface TrackView {
 }
 
 /** Track settings, changed on the device (SELECT page) or on the app page (track list). */
-export type TrackSettings = Partial<Pick<Track, 'name' | 'kind' | 'octave' | 'rate' | 'length' | 'midi' | 'harmony' | 'voicing'>>;
+export type TrackSettings = Partial<Pick<Track, 'name' | 'kind' | 'octave' | 'rate' | 'length' | 'midi' | 'harmony' | 'voicing' | 'level' | 'mute' | 'solo'>>;
 
 export interface MuOpView {
     /** Selected track 0..15. */
@@ -95,8 +101,14 @@ export interface MuOpView {
     volume: number;
     /** Playhead step, -1 = stopped. */
     step: number;
+    /** Song position in clock steps (16ths) while playing, -1 = stopped. */
+    tick: number;
+    /** Clock steps until all tracks (lengths, clocks) and the bar line up again. */
+    cycle: number;
     /** What the pads show (grid + playhead), pad 0 = bottom left. */
     cells: Cell[];
+    /** Per pad: what it plays / holds (drum sound, note, chord), '' = nothing. */
+    labels: string[];
     /** Last display message. */
     message: string;
     /** Punch-in FX active now (held + recorded on the current step), names. */
@@ -147,6 +159,10 @@ export class MuOpController {
     private generators = new Map<number, Generator>();
     /** Bars played (for VARIATION auto). */
     private bars = 0;
+    /** Song position (clock steps) of the step sounding now. */
+    private tick = 0;
+    /** Beats since play started, -1 = stopped (idle display: the position). */
+    private beats = -1;
     /** SHIFT + Copy: one track's steps of a pattern. */
     private clipboard: { kind: TrackKind; steps: PatternTrack } | null = null;
     private metronome = new Metronome();
@@ -189,6 +205,7 @@ export class MuOpController {
     ) {
         this.seq = new Sequencer(song, sounds);
         this.history = new History(song);
+        this.inputs = new Inputs(sounds, () => this.notify());
         this.seq.onEdit = (pattern) => {
             this.history.edit(pattern);
             this.saveSoon();
@@ -219,8 +236,10 @@ export class MuOpController {
                 }
             }
             this.seq.clock.at(s.time, () => {
+                if (s.step % 4 === 0) this.idlePosition(s.pattern, s.tick);
                 this.step = s.step;
                 this.positions = s.positions;
+                this.tick = s.tick;
                 this.stepFx = s.fx;
                 if (!this.stepMode && !this.pages.active?.cells) {
                     for (const pad of s.pads[this.track]) if (pad >= 0 && pad < 16) this.flash(pad, this.padColor(pad));
@@ -237,6 +256,7 @@ export class MuOpController {
         });
         this.song.tracks.forEach((t, i) => this.sounds.setMidi(i, t.midi));
         if (this.song.tracks.some((t) => t.midi)) void requestMidi();
+        void this.inputs.start();
         this.update();
         try {
             await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
@@ -250,6 +270,7 @@ export class MuOpController {
             clearTimeout(this.sayTimer);
             clearTimeout(this.saveTimer);
             saveSong(this.song);
+            this.inputs.dispose();
             this.sounds.dispose();
         }
     }
@@ -275,6 +296,9 @@ export class MuOpController {
     }
 
     // --- Sounds: browser, parameters, favorites ---
+
+    /** Audio inputs (USB audio of external synths): app page only (Inputs tab, mixer strip). */
+    readonly inputs: Inputs;
 
     /** Per track: its last edited sound (listed in the browser, so browsing away and back finds it). */
     private edited = new Map<number, { sound: string; params: Params }>();
@@ -332,8 +356,8 @@ export class MuOpController {
         this.setParams(track, { ...this.song.tracks[track].params, [def.id]: value });
     }
 
-    /** PLUG-IN + push: random values for the shown parameters. */
-    private randomize(track: number): void {
+    /** PLUG-IN + push (and the sound editor): random values for the shown parameters. */
+    randomize(track: number): void {
         const t = this.song.tracks[track];
         if (!t.kind) return this.say(`${this.label(track)}\n${EMPTY}`);
         this.beforeRandom.set(track, { ...t.params });
@@ -348,8 +372,8 @@ export class MuOpController {
         this.say(`Random\n${t.kind === 'drums' ? DRUM_SOUNDS[this.drumSound].name : this.soundName(track)}`);
     }
 
-    /** PLUG-IN short press: back to before the last randomize (and forward again). */
-    private revert(track: number): void {
+    /** PLUG-IN short press (and the sound editor): back to before the last randomize (and forward again). */
+    revert(track: number): void {
         const before = this.beforeRandom.get(track);
         if (!before) return this.say('Sound\nnothing to go back to');
         this.beforeRandom.set(track, { ...this.song.tracks[track].params });
@@ -411,6 +435,10 @@ export class MuOpController {
             void this.setSound(track, t.sound, false);
         }
         if ('midi' in patch) this.sounds.setMidi(track, t.midi);
+        if (patch.level !== undefined) {
+            t.level = clamp(t.level, 0, 1.5);
+            this.sounds.setLevel(track, t.level);
+        }
         this.saveSoon();
         this.update();
     }
@@ -866,10 +894,11 @@ export class MuOpController {
                 break;
             case 'buttonUp':
                 // STEP held (long or used): it was a temporary switch, back to the other view
-                if (e.button !== 'step' || (!e.chorded && e.duration < TAP_MS)) return;
-                this.stepMode = !this.stepMode;
-                this.say(this.stepMode ? `Steps\n${this.label(this.track)}` : 'Play pads');
-                break;
+                if (e.button === 'step' && (e.chorded || e.duration >= TAP_MS)) {
+                    this.stepMode = !this.stepMode;
+                    this.say(this.stepMode ? `Steps\n${this.label(this.track)}` : 'Play pads');
+                }
+                break; // update() either way: the page shows the held button
             case 'strip':
                 this.sounds.setFilter(e.position ? (e.position - 1) / (STRIP_MAX - 1) : null);
                 this.drawStrip(e.position);
@@ -910,6 +939,7 @@ export class MuOpController {
                 return this.say(seq.playing ? `Play  pattern ${seq.pattern + 1}` : 'Pause');
             case 'restart':
                 seq.restart();
+                this.beats = -1;
                 return this.say(`Restart  pattern ${seq.pattern + 1}`);
             case 'stop':
                 seq.stop();
@@ -1127,6 +1157,22 @@ export class MuOpController {
             g.dejaVu = dejaVu;
         }
         this.say(`Density ${pct(density)}%\n${this.label(this.track)}`);
+    }
+
+    /**
+     * While playing, the blanked display shows the position as in the app's status bar: "P3  2.4 /3" = pattern 3,
+     * bar 2 beat 4 of a 3-bar cycle (starts over when all tracks line up again; "/n" only for cycles > 1 bar).
+     * Small text, one frame per beat, moving a bit every bar (bouncing around) so the OLED wears evenly.
+     */
+    private idlePosition(pattern: number, tick: number): void {
+        const n = ++this.beats;
+        const moves = Math.floor(n / 4);
+        const tri = (v: number, m: number) => m - Math.abs((v % (2 * m)) - m);
+        const cycle = this.cycle();
+        const inCycle = tick % cycle;
+        const bars = cycle / STEPS;
+        const text = `P${pattern + 1}  ${Math.floor(inCycle / STEPS) + 1}.${Math.floor((inCycle % STEPS) / 4) + 1}${bars > 1 ? ` /${bars}` : ''}`;
+        this.m.screen.idle(text, tri(moves * 5, 128 - 6 * text.length), 9 + tri(moves * 2, 23));
     }
 
     /** Strip LEDs as a bar 0..1 (null = off). */
@@ -1362,6 +1408,10 @@ export class MuOpController {
         if (showHead) this.playhead.pad(head, 'white', 3);
         // the display stays on while a page button or a step is held, blanks 3 s after release
         this.m.screen.hold(!!this.pages.active || !!this.heldStep);
+        if (!this.seq.playing && this.beats >= 0) {
+            this.beats = -1;
+            this.m.screen.idle(null);
+        }
         if (!this.recording && !this.m.input.heldButtons.length && !this.m.input.heldPads.length) this.history.close();
 
         // 1 = usable, more = a state; page buttons and the held page's view are applied by `pages.lights()`
@@ -1432,8 +1482,71 @@ export class MuOpController {
         this.saveTimer = setTimeout(() => saveSong(this.song), 500);
     }
 
+    /** Clock steps after which every track in use is back at its step 1 on a bar line (LCM of the loop lengths). */
+    private cycle(): number {
+        const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
+        // in half clock steps (×2 clock tracks loop on half steps), the bar (16 clock steps) included
+        let units = 2 * STEPS;
+        for (const t of this.song.tracks) {
+            if (!t.kind) continue;
+            const u = Math.round((2 * t.length) / t.rate);
+            units = (units / gcd(units, u)) * u;
+        }
+        return units / 2;
+    }
+
+    /** The drum sound PLUG-IN / STEP / the sound editor work on (sound editor). */
+    selectDrumSound(sound: number): void {
+        this.drumSound = clamp(sound, 0, DRUMS - 1);
+        this.update();
+    }
+
+    /** Master level for the page's meter (per animation frame). */
+    meter() {
+        return this.sounds.meter();
+    }
+
+    /** The summed audio inputs' level (mixer meter). */
+    inputsMeter() {
+        return this.sounds.inputsMeter();
+    }
+
+    /** A track's level for the mixer meters (per animation frame). */
+    trackMeter(track: number) {
+        return this.sounds.trackMeter(track);
+    }
+
+    /** Master volume 0..1 (mixer, VOLUME page). */
+    setVolume(v: number): void {
+        this.song.volume = clamp(v, 0, 1);
+        this.sounds.volume = this.song.volume;
+        this.saveSoon();
+        this.update();
+    }
+
+    /** Pad labels for the app page: the play view's sounds / notes / chords, or the steps' values in STEP mode. */
+    private padLabels(): string[] {
+        const kind = this.cur.kind;
+        const none = Array<string>(16).fill('');
+        if (!kind || this.pages.active?.cells) return none;
+        const steps = this.song.patterns[this.seq.pattern].tracks[this.track];
+        if (this.stepMode) {
+            return none.map((_, s) => {
+                if (s >= this.cur.length) return '';
+                if (kind === 'drums') return steps.drums[this.drumSound][s] > 0 ? DRUM_SOUNDS[this.drumSound].name : '';
+                const n = steps.notes[s];
+                if (n === null) return '';
+                const len = steps.lengths[s];
+                return len > 1 ? `${this.valueName(n)} ×${len}` : this.valueName(n);
+            });
+        }
+        if (kind === 'drums') return none.map((_, i) => DRUM_SOUNDS[i]?.name ?? '');
+        return none.map((_, i) => this.valueName(i));
+    }
+
     private makeView(cells: Cell[] = this.cells()): MuOpView {
         return {
+            labels: this.padLabels(),
             track: this.track,
             tracks: this.song.tracks.map((t, i) => ({
                 name: t.name,
@@ -1446,6 +1559,9 @@ export class MuOpController {
                 midi: t.midi,
                 harmony: t.harmony,
                 voicing: t.voicing,
+                mute: t.mute,
+                solo: t.solo,
+                audible: audible(this.song, i),
                 favorite: t.kind ? favorites()[favoriteOf(t.kind, t.sound, t.params)]?.name ?? null : null,
                 params: t.params,
             })),
@@ -1466,6 +1582,8 @@ export class MuOpController {
             swing: this.song.swing,
             volume: this.song.volume,
             step: this.step,
+            tick: this.seq.playing ? this.tick : -1,
+            cycle: this.cycle(),
             cells,
             message: this.message,
             held: (this.m.input.heldButtons.filter((b): b is LedButton => b !== 'enc-push' && b !== 'enc-touched').pop() ?? null),

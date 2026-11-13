@@ -226,18 +226,49 @@ tracks) has the same settings plus the ones that are only set there (name, MIDI 
 
 ### 10. Display
 
-- show the transport pos on the blank, move it over the disp to "burn" pixels evenly (when playing)
+- [x] show the transport pos on the blank, move it over the disp to "burn" pixels evenly (when playing)
 
-- in the App, the pad drawing could show more stuff. like the drum pad sound or the chord or the set note in the step view
+- [x] in the App, the pad drawing could show more stuff. like the drum pad sound or the chord or the set note in the step view
+
+  → done: `screen.idle()` in the driver: while playing, the blanked display shows "P3  12.2" (pattern, bar.beat) in
+  small text, one frame per beat, moving one step per bar (bouncing). App pads: drum names / notes / chords,
+  STEP mode: the step values (×n = length).
 
 ### 11 Web App page
 
 To the side of the pad display...
+- [/] all the text... move it up into a new "status" section ? 
+  - [/] play head counter (should reset when the longest pattern is through)
+  - [/] add a volume level indicator with a red "over" (something knistert in the sound engine)
+  - ?
 
-- add a mixer view
-  - can the audio engine capture usb audio ? My ext synth does audio out via usb, could be mixed into the app. ??
-- add sound editor view - edit params for the sound on the selected track.
-- also during perform - the table of FX from the bottom could be in the help.
+- [/] the right of the step visuals.. could change content on demand.. i'm thinking levels and mixer, changing to help when buttons are held.
+- [/] add a mixer view 
+  - [/] and maybe per track levels ? with a slider to adjust ?
+  - [/] can the audio engine capture usb audio ? My ext synth does audio out via usb, could be mixed into the app. ??
+- [/] add sound editor view - edit params for the sound on the selected track.
+- [/] also during perform - the table of FX from the bottom could be in the help.
+- [ ] there could also be a sound visualizer ?
+
+Plan (order):
+1. [x] Status bar above the pads: ▶ / ● rec, BPM, key, position `P3 · 12.2`, cycle counter (tracks line up again
+   after the LCM of their lengths / clocks), master level meter with peak hold + red "over".
+   Crackling: red = clipping (→ master limiter), no red = audio dropouts (→ AudioContext latencyHint 'playback').
+2. [x] Right panel switches with the context: Mixer (default) / help (button held) / FX table (PERFORM held) /
+   sound editor (PLUG-IN held or clicked).
+3. [x] Mixer: per track fader, meter, mute / solo, Drive (track bus drive, drums too), MIDI label; master fader + meter.
+   Mute / solo stored in the song; the sequencer skips silent tracks (sound + MIDI), live pads still play.
+   Later: mute / solo on the device (part 8), MIDI ↔ internal switch in the strip.
+4. [x] Sound editor: sliders / selects generated from the ParamDefs, drum sound buttons, Randomize, A/B.
+   Later: favorites list (rename).
+5. [ ] Pattern overview: all tracks × 16 steps of the current pattern, clickable, with the playhead.
+6. [x] Audio inputs (app only): USB audio of external synths, several at once. Inputs tab: per input device / level /
+   mute / meter / status (permission, unplugged → reopens on replug); saved on this computer (localStorage).
+   Mixer: one "Inputs" strip (summed: fader, meter, mute) → strip filter → PERFORM mix FX → master.
+   (`src/engine/input.ts`, `src/apps/muop/inputs.ts`.) Later: latency compensation (send MIDI earlier by the input
+   latency, set by ear or measured), channel pair choice on multi-channel interfaces, Drive on the inputs.
+7. [ ] Later: chain view, WAV recording of the master (MediaRecorder), song file save / load (JSON),
+   computer keyboard shortcuts, MIDI routing presets per synth, visualizer (scope / spectrum).
 
 ### Sound engines
 

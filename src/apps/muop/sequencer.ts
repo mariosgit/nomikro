@@ -1,7 +1,7 @@
 // μOp sequencer: plays the song's pattern chain on the clock, records live hits quantized to the nearest step.
 import { Clock } from '../../engine/clock';
 import { toAudioTime } from '../../engine/audio';
-import { DRUMS, MAX_LENGTH, STEPS, type FxHit, type Song } from './model';
+import { DRUMS, MAX_LENGTH, STEPS, audible, type FxHit, type Song } from './model';
 import { chordAt, harmonyTrack, trackMidis } from './harmony';
 import { FX, TrackFx } from './fx';
 import type { MasterFxId } from '../../engine/fx';
@@ -18,6 +18,8 @@ export interface PlayedStep {
     fx: FxHit[];
     /** Per track: its current step (0..length-1, own clock rate), for the playhead. */
     positions: number[];
+    /** Song position in clock steps (16ths) since the start. */
+    tick: number;
 }
 
 /** The track's step counter (own rate) at song position `tick` (clock steps). */
@@ -195,7 +197,7 @@ export class Sequencer {
         this.chord = h < 0 ? null : chordAt(this.song.patterns[pattern], h, ht.length, trackPos(tick, ht.rate) % ht.length);
 
         const pads = this.song.tracks.map((track, i): number[] => {
-            if (track.kind === null) return [];
+            if (track.kind === null || !audible(this.song, i)) return [];
             const played: number[] = [];
             // the track's steps on this clock step: ×2 = two (half a step apart), ÷4 = one every 4th clock step
             const first = Math.ceil(tick * track.rate - 1e-9);
@@ -233,7 +235,7 @@ export class Sequencer {
         this.recent.push({ time, pattern, tick, duration });
         if (this.recent.length > 8) this.recent.shift();
         const positions = this.song.tracks.map((track) => trackPos(tick, track.rate) % track.length);
-        for (const l of this.listeners) l({ time, pattern, step, pads, fx: active, positions });
+        for (const l of this.listeners) l({ time, pattern, step, pads, fx: active, positions, tick });
     }
 
     /** Engages / releases FX for this step: track FX remap steps, global FX drive the master bus (and the clock). */
