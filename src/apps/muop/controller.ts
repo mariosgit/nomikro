@@ -157,10 +157,17 @@ const HELP_TOP: Help[] = [
     { keys: 'RESTART', text: 'Play from the start of the current pattern right away (a queued pattern / chain starts right away instead)' },
 ];
 const HELP_BOTTOM: Help[] = [
-    { keys: 'Touch strip', text: 'Low-pass filter while touched' },
+    { keys: 'Touch strip', text: 'DJ filter while touched: left of the middle low-pass (darker to the end), right high-pass (thinner to the end), the middle and letting go = open. Strip lights: cyan low-pass, orange high-pass' },
     { keys: 'STAR', text: 'Save the current sound (instrument + parameters) as a favorite, for all songs. Favorites come after the instruments in the sound browser (SEARCH, PLUG-IN). STAR lit = the sound is a favorite. Delete them on the app page' },
     { keys: 'Button lights', text: 'Dim = usable, bright = active / held. While a page is held, only what it uses stays lit' },
 ];
+
+/** Strip position 1..200 → DJ filter -1 (low-pass closed) .. 0 (open, ±6 % around the middle) .. 1 (high-pass up). */
+function djFilter(position: number): number {
+    const x = ((position - 1) / (STRIP_MAX - 1)) * 2 - 1;
+    const dead = 0.06;
+    return Math.abs(x) < dead ? 0 : Math.sign(x) * ((Math.abs(x) - dead) / (1 - dead));
+}
 
 export class MuOpController {
     view: MuOpView;
@@ -1109,7 +1116,7 @@ export class MuOpController {
                 }
                 break; // update() either way: the page shows the held button
             case 'strip':
-                this.sounds.setFilter(e.position ? (e.position - 1) / (STRIP_MAX - 1) : null);
+                this.sounds.setFilter(e.position ? djFilter(e.position) : null);
                 this.drawStrip(e.position);
                 break;
             default:
@@ -1673,9 +1680,21 @@ export class MuOpController {
         }
     }
 
-    /** Touch strip: filter amount as a bar. */
+    /** Touch strip DJ filter: lit from the center towards the finger, cyan = low-pass (left), orange = high-pass (right). */
     private drawStrip(position: number): void {
-        this.stripValue(position ? (position - 1) / (STRIP_MAX - 1) : null);
+        const center = (STRIP_LEDS - 1) / 2;
+        if (!position) {
+            for (let i = 0; i < STRIP_LEDS; i++) this.m.lights.strip(i, 'off');
+            return;
+        }
+        const a = djFilter(position);
+        const lit = Math.round(center + a * center);
+        const color: Color = a < 0 ? 'cyan' : 'orange';
+        for (let i = 0; i < STRIP_LEDS; i++) {
+            if (i === center) this.m.lights.strip(i, 'white', a === 0 ? 3 : 1); // the open middle
+            else if (a !== 0 && (i - center) * a > 0 && Math.abs(i - center) <= Math.abs(lit - center)) this.m.lights.strip(i, color, i === lit ? 3 : 1);
+            else this.m.lights.strip(i, 'off');
+        }
     }
 
     /**

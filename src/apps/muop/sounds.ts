@@ -17,6 +17,12 @@ const DRUM_MIDI_MS = 50;
 export const soundsFor = (kind: TrackKind): readonly InstrumentDef<DrumKit | Melodic>[] => (kind === 'drums' ? DRUM_KITS : MELODIC);
 
 const OPEN = 20000;
+/** DJ filter: low-pass 20 kHz → 150 Hz (left), high-pass 30 Hz → 8 kHz (right). Resonance only while engaged. */
+const LP_MIN = 150;
+const HP_OPEN = 30;
+const HP_MAX = 8000;
+const Q_OPEN = 0.7;
+const Q_ON = 4;
 const SILENT: Voice = { release() {} };
 
 interface Slot {
@@ -43,7 +49,9 @@ interface Slot {
 
 export class Sounds {
     private master: GainNode;
+    /** Strip DJ filter: the mix goes into `filter` (low-pass), then `highpass`. */
     private filter: BiquadFilterNode;
+    private highpass: BiquadFilterNode;
     /** Punch-in FX on the whole mix (PERFORM + pads 9–16). */
     readonly fx: MasterFx;
     private disposed = false;
@@ -59,10 +67,13 @@ export class Sounds {
     private slots = new Map<number, Slot>();
 
     constructor(readonly ctx: AudioContext) {
-        this.filter = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: OPEN, Q: 4 });
+        // DJ filter: low-pass → high-pass in series, both open at rest (low Q, no resonance bump at the ends)
+        this.filter = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: OPEN, Q: Q_OPEN });
+        this.highpass = new BiquadFilterNode(ctx, { type: 'highpass', frequency: HP_OPEN, Q: Q_OPEN });
+        this.filter.connect(this.highpass);
         this.master = new GainNode(ctx, { gain: 0.8 });
         this.fx = new MasterFx(ctx);
-        this.filter.connect(this.fx.input);
+        this.highpass.connect(this.fx.input);
         this.fx.output.connect(this.master).connect(ctx.destination);
         this.analyser = new AnalyserNode(ctx, { fftSize: 2048 });
         this.master.connect(this.analyser);
@@ -238,10 +249,20 @@ export class Sounds {
         this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02);
     }
 
-    /** Low-pass cutoff 0..1 (exponential 150 Hz..20 kHz), null = open. */
+    /**
+     * DJ filter: -1..0 = low-pass closing towards the left end, 0..1 = high-pass opening towards the right end,
+     * 0 / null = open (null: released, a slower glide back).
+     */
     setFilter(amount: number | null): void {
-        const hz = amount === null ? OPEN : 150 * Math.pow(OPEN / 150, Math.min(1, Math.max(0, amount)));
-        this.filter.frequency.setTargetAtTime(hz, this.ctx.currentTime, amount === null ? 0.08 : 0.02);
+        const now = this.ctx.currentTime;
+        const glide = amount === null ? 0.08 : 0.02;
+        const a = Math.min(1, Math.max(-1, amount ?? 0));
+        const lp = a < 0 ? OPEN * Math.pow(LP_MIN / OPEN, -a) : OPEN;
+        const hp = a > 0 ? HP_OPEN * Math.pow(HP_MAX / HP_OPEN, a) : HP_OPEN;
+        this.filter.frequency.setTargetAtTime(lp, now, glide);
+        this.highpass.frequency.setTargetAtTime(hp, now, glide);
+        this.filter.Q.setTargetAtTime(a < 0 ? Q_ON : Q_OPEN, now, 0.03);
+        this.highpass.Q.setTargetAtTime(a > 0 ? Q_ON : Q_OPEN, now, 0.03);
     }
 
     /** Routes a track to MIDI out (null = back to its instrument). */
