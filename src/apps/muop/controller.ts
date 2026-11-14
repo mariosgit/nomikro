@@ -87,7 +87,7 @@ export interface TrackView {
 }
 
 /** Track settings, changed on the device (SELECT page) or on the app page (track list). */
-export type TrackSettings = Partial<Pick<Track, 'name' | 'kind' | 'octave' | 'rate' | 'length' | 'midi' | 'harmony' | 'voicing' | 'level' | 'mute' | 'solo'>>;
+export type TrackSettings = Partial<Pick<Track, 'name' | 'kind' | 'octave' | 'rate' | 'length' | 'midi' | 'harmony' | 'voicing' | 'level' | 'mute' | 'solo' | 'drumMute'>>;
 
 export interface MuOpView {
     /** Selected track 0..15. */
@@ -546,6 +546,11 @@ export class MuOpController {
         for (let n = m ? Number(m[2]) + 1 : 2; ; n++) if (!names.has(`${base} ${n}`)) return `${base} ${n}`;
     }
 
+    /** The drums track SOLO mutes sounds on: the selected one if it's drums, else the first drums track (-1 = none). */
+    private drumsTrack(): number {
+        return this.cur.kind === 'drums' ? this.track : this.song.tracks.findIndex((t) => t.kind === 'drums');
+    }
+
     /** Swaps two tracks (app page ↑ / ↓: with the next track in use, empty ones in between stay). */
     swapTracks(a: number, b: number): void {
         const order = [...this.song.tracks.keys()];
@@ -755,6 +760,68 @@ export class MuOpController {
                 c.saveSoon();
             },
             help: [{ keys: 'ERASE + pad', text: 'Clear that drum sound (pads show the used ones). Notes / chords track: any pad clears the track in this pattern' }],
+        };
+
+        /** MUTE + pad: tracks on / off (pads show the tracks like SELECT: bright = plays, dim = muted). */
+        const mute: Page = {
+            button: 'mute',
+            name: 'Mute',
+            hint: 'pad = track on / off',
+            cells: () => c.song.tracks.map((t, i) => (t.kind ? { color: trackColor(t), level: audible(c.song, i) ? 3 : 1 } : OFF)),
+            padDown: (pad) => {
+                const t = c.song.tracks[pad];
+                if (!t?.kind) return c.say(`Mute\nT${pad + 1} ${EMPTY}`);
+                c.setTrack(pad, { mute: !t.mute });
+                c.say(`Mute\n${c.label(pad)}: ${t.mute ? 'off' : audible(c.song, pad) ? 'on' : 'on (solo elsewhere)'}`);
+            },
+            tap: {
+                name: 'Unmute all tracks',
+                run: () => {
+                    c.song.tracks.forEach((t, i) => t.mute && c.setTrack(i, { mute: false }));
+                    c.say('Mute\nall tracks on');
+                },
+            },
+            help: [
+                {
+                    keys: 'MUTE + pad',
+                    text: 'Track on / off, right away (pads show the tracks: bright = plays, dim = muted). Solo per track: the mixer on the app page. MUTE lit while a track is muted',
+                },
+            ],
+        };
+
+        /** SOLO + pad: drum sounds of the drums track on / off (quick access for breaks). */
+        const solo: Page = {
+            button: 'solo',
+            name: 'Drum mute',
+            hint: 'pad = drum sound on / off',
+            open: () => {
+                if (c.drumsTrack() < 0) c.say('Drum mute\nno drums track');
+            },
+            cells: () => {
+                const t = c.song.tracks[c.drumsTrack()];
+                return Array.from({ length: 16 }, (_, i) => (t && i < DRUMS ? { color: DRUM_SOUNDS[i].color, level: t.drumMute & (1 << i) ? 1 : 3 } : OFF));
+            },
+            padDown: (pad) => {
+                const d = c.drumsTrack();
+                if (d < 0 || pad >= DRUMS) return;
+                const t = c.song.tracks[d];
+                c.setTrack(d, { drumMute: t.drumMute ^ (1 << pad) });
+                c.say(`Drum mute\n${DRUM_SOUNDS[pad].name}: ${t.drumMute & (1 << pad) ? 'off' : 'on'}`);
+            },
+            tap: {
+                name: 'Unmute all drum sounds',
+                run: () => {
+                    const d = c.drumsTrack();
+                    if (d >= 0) c.setTrack(d, { drumMute: 0 });
+                    c.say('Drum mute\nall drums on');
+                },
+            },
+            help: [
+                {
+                    keys: 'SOLO + pad 1–8',
+                    text: 'Drum sound on / off on the drums track (the selected one, else the first), right away: bright = plays, dim = muted. Live pads still play it. SOLO lit while one is muted',
+                },
+            ],
         };
 
         const tempo: Page = {
@@ -986,6 +1053,13 @@ export class MuOpController {
                     },
                 },
             ],
+            // AUTO (below the strip): auto off → 1 → 2 → 4 bars → off, lit while auto is on
+            buttons: ['auto'],
+            buttonDown: () => {
+                const g = c.generator(c.track).settings;
+                g.auto = AUTO_BARS[(AUTO_BARS.indexOf(g.auto as (typeof AUTO_BARS)[number]) + 1) % AUTO_BARS.length];
+                return variation.params!.findIndex((p) => p.name === 'Auto'); // show it
+            },
             open: () => c.stripValue(c.generator(c.track).settings.dejaVu, 'violet'),
             close: () => c.stripValue(null),
             strip: (position) => {
@@ -1003,6 +1077,7 @@ export class MuOpController {
                     text: 'Random patterns, Marbles style. Empty track or any track: makes a pattern from scratch. Déjà vu sets the depth: low = a lot changes, ½ = the same pattern (reshape it with density / bias / spread / steps), high = shuffled. Undo with SHIFT + pad 1',
                 },
                 { keys: 'VARIATION + strip', text: 'Déjà vu (the strip shows it in violet while VARIATION is held)' },
+                { keys: 'VARIATION + AUTO', text: 'Auto: off → every 1 → 2 → 4 bars → off (AUTO lit while auto is on)' },
             ],
         };
 
@@ -1088,7 +1163,7 @@ export class MuOpController {
                 run: () => c.applyProjectPage(c.pages.currentParam(project)),
             },
         };
-        return [select, pattern, duplicate, erase, perform, tempo, swing, volume, search, plugin, chords, variation, shift, project];
+        return [select, pattern, duplicate, erase, perform, mute, solo, tempo, swing, volume, search, plugin, chords, variation, shift, project];
     }
 
     // --- input ---
@@ -1647,7 +1722,11 @@ export class MuOpController {
             ['star', input.isHeld('star') ? 4 : kind && favoriteOf(kind, this.cur.sound, this.cur.params) >= 0 ? 3 : 1],
             ['perform', this.activeFx().length ? 3 : 1],
             ['variation', this.generators.get(this.track)?.settings.auto ? 3 : 1],
+            ['mute', this.song.tracks.some((t) => t.kind && t.mute) ? 3 : 1],
+            ['solo', this.song.tracks[this.drumsTrack()]?.drumMute ? 3 : 1],
         ]);
+        // VARIATION held: AUTO cycles auto, lit while it's on
+        if (this.pages.active?.button === 'variation') levels.set('auto', this.generators.get(this.track)?.settings.auto ? 3 : 1);
         if (this.heldStep && kind && kind !== 'drums') {
             levels.set('arrow_left', input.isHeld('arrow_left') ? 4 : 1);
             levels.set('arrow_right', input.isHeld('arrow_right') ? 4 : 1);

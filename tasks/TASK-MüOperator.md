@@ -38,10 +38,10 @@ Rules:
 | PATTERN | patterns (select / chain) | – | – | – |
 | PERFORM | FX 1–8 track, 9–16 mix | FX settings (later) | FX amount (later) | – |
 | CHORDS | 12 roots + 4 scales | root, scale, voicing | – | press = chords track |
-| VARIATION | playable | density, déjà vu, bias, spread, steps, auto | déjà vu | generate |
+| VARIATION | playable | density, déjà vu, bias, spread, steps, auto (also AUTO: off → 1 → 2 → 4) | déjà vu | generate |
 | PLUG-IN | playable (drums: drum sound select) | sound, the instrument's parameters | macro / morph (later) | push = randomize, short = A/B |
 | Held step pad (STEP mode) | hold + later step = length | note / chord, length | – | – |
-| MUTE / SOLO (open) | tracks (drums track: drum sounds) | – | – | – |
+| MUTE / SOLO | MUTE: tracks, SOLO: drum sounds | – | – | tap = unmute all |
 | TEMPO / SWING / VOLUME | – | value (VOLUME: `< >` track / master) | – | – |
 | SEARCH | playable | sound browser | – | short press = next sound |
 | PROJECT | playable | Create (new / duplicate), Load (the list, at the loaded one *) | – | push = do it; playing: switches at the next bar, seamlessly, display counts the beats down (release without push = no change) |
@@ -98,9 +98,9 @@ Rules:
   pair choice on multi-channel interfaces, Drive on the inputs.
 
 ### 2. MUTE / SOLO on the device
-- [ ] MUTE / SOLO + pad: per track (pads show the tracks like SELECT), per drum sound on a drums track.
-  (Mute / solo per track exist in the song and the app mixer already.)
-  - maybe missuse solo as the drum per voice mute (needs quick access)
+- [x] MUTE + pad: track on / off (pads show the tracks: bright = plays, dim = muted), MUTE tap = all on.
+  SOLO + pad 1–8: drum sound on / off on the drums track (selected one, else the first; `Track.drumMute` bits, saved
+  in the song), SOLO tap = all on. Lit while something is muted. Track solo stays in the app mixer.
 
 ### 3. Workflow: drops
 - [ ] Any way to generate a drop now and then? Ideas:
@@ -122,6 +122,7 @@ Moved to [TASK-SOUNDS.md](TASK-SOUNDS.md) (engines, sound tuning, plugins).
 - **VARIATION:** save the generator settings in the song; a "sound" target (vary the track's sound with déjà vu; until
   then PLUG-IN + push randomizes the sound); Grids-style drum map (own data, Grids is GPL-3.0) if the Marbles-style
   drums aren't enough.
+  - SHIFT + strip = density + trigger... not to usefull for drops (confusing and out of concept). Because it changes the track setting and with auto=on it will regenerate a sparse pattern. Better workout a DROP feature, it was on some list...
 - **Notes:** per-track Poly setting (SELECT page) to let notes overlap (pads, drones).
 - **PERFORM:** strip = FX amount, FX settings on `< >`, more track FX (octave up, random steps), per-track sends
   instead of the whole mix.

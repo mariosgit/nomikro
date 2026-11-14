@@ -35,6 +35,8 @@ export interface Track {
     /** Mixer: muted = the sequencer skips it (sound and MIDI); solo = only the solo tracks play. Live pads still play. */
     mute: boolean;
     solo: boolean;
+    /** Drums tracks: muted drum sounds, bit n = sound n (SOLO + pad). The sequencer skips them, live pads still play. */
+    drumMute: number;
 }
 
 /** Does the sequencer play this track (mute / solo)? */
@@ -107,7 +109,7 @@ export interface Song {
 
 export type Key = Pick<Song, 'root' | 'scale'>;
 
-const TRACK_DEFAULTS = { rate: 1, length: STEPS, midi: null, harmony: 'free', voicing: 0, mute: false, solo: false } as const;
+const TRACK_DEFAULTS = { rate: 1, length: STEPS, midi: null, harmony: 'free', voicing: 0, mute: false, solo: false, drumMute: 0 } as const;
 /** An unused track slot (hidden in the track list). */
 export const emptyTrack = (n: number): Track => ({ kind: null, name: `Track ${n + 1}`, sound: '', params: {}, level: 1, octave: 0, ...TRACK_DEFAULTS });
 
@@ -304,6 +306,7 @@ export function parseSong(data: unknown): Song | null {
         t.params ??= {}; // saved before sound parameters
         t.mute ??= false; // saved before the mixer
         t.solo ??= false;
+        t.drumMute ??= 0; // saved before drum sound mutes
     }
     s.root ??= 9; // A minor was fixed before
     s.scale ??= 'minor';

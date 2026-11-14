@@ -251,6 +251,7 @@ export class Sequencer {
                 if (track.kind === 'drums') {
                     for (let sound = 0; sound < DRUMS; sound++) {
                         const v = steps.drums[sound][src.step];
+                        if (track.drumMute & (1 << sound)) continue; // SOLO + pad: muted drum sound
                         if (v > 0 && !this.skip.delete(this.key(src.pattern, src.step, { track: i, sound }))) {
                             for (let h = 0; h < src.hits; h++) this.sounds.drum(i, sound, at(h), v);
                             played.push(sound);

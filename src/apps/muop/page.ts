@@ -93,6 +93,11 @@ export interface Page {
     /** Other buttons that do something while the page is held (lit dim, the rest goes dark). */
     buttons?: readonly LedButton[];
     /**
+     * One of `buttons` pressed while the page is held. Return a parameter index to show (and select) it,
+     * true = handled (the current parameter is shown again), false = not handled.
+     */
+    buttonDown?(button: LedButton): number | boolean;
+    /**
      * A modifier page (e.g. ERASE) only becomes active when no other page is held:
      * ERASE + PERFORM is the PERFORM page with ERASE held, in either press order.
      */
@@ -154,6 +159,14 @@ export class Pages {
                     this.paramIndex.set(active, Math.min(params.length - 1, Math.max(0, i)));
                     this.show(active);
                     return true;
+                }
+                if (active.buttonDown && active.buttons?.includes(e.button as LedButton)) {
+                    const r = active.buttonDown(e.button as LedButton);
+                    if (r !== false) {
+                        if (typeof r === 'number') this.paramIndex.set(active, r);
+                        this.show(active);
+                        return true;
+                    }
                 }
                 if (e.button === 'enc-push' && active.apply) {
                     active.apply.run();
