@@ -1,5 +1,5 @@
 // The shell: device connection, header (app switcher, status), routing. Apps live in src/apps/.
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { HID_FILTER, MaschineMikroMk3, isMaschineMikroMk3 as isMaschine } from '../maschine';
 import { APPS, DEFAULT_APP, isAppName, type AppName } from '../apps';
 import { devlog } from '../dev/devlog';
@@ -23,6 +23,8 @@ export function App() {
         HID_SUPPORTED ? { kind: 'idle', text: 'Not connected' } : { kind: 'error', text: 'WebHID not supported' },
     );
     const [maschine, setMaschine] = useState<MaschineMikroMk3 | null>(null);
+    /** The current driver, for the HID event handlers (registered once). */
+    const maschineRef = useRef<MaschineMikroMk3 | null>(null);
     const [route, setRoute] = useState(currentRoute);
     const [routeKey, setRouteKey] = useState(0);
 
@@ -47,8 +49,10 @@ export function App() {
     const connectDevice = async (device: HIDDevice) => {
         try {
             setStatus({ kind: 'busy', text: 'Connecting…' });
+            maschineRef.current?.close(); // a driver left over (connect event without a disconnect before)
             const m = new MaschineMikroMk3();
             await m.openDevice(device);
+            maschineRef.current = m;
             setMaschine(m);
             setStatus({ kind: 'ok', text: 'Connected' });
             devlog('connected');
@@ -66,6 +70,9 @@ export function App() {
         };
         const onDisconnect = (event: HIDConnectionEvent) => {
             if (isMaschine(event.device)) {
+                // fail the pending / queued writes now, so the running task's cleanup finishes and the next task can start
+                maschineRef.current?.close();
+                maschineRef.current = null;
                 setMaschine(null);
                 setStatus({ kind: 'idle', text: 'Disconnected' });
                 devlog('disconnected');

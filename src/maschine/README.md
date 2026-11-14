@@ -19,6 +19,9 @@ button.onclick = async () => { m = await connect({ prompt: true }); };
 ```
 
 For your own connection handling: `HID_FILTER`, `isMaschineMikroMk3(device)`, `new MaschineMikroMk3().openDevice(hidDevice)`.
+On unplug (`navigator.hid` 'disconnect' event) call `m.close()`: queued and later writes fail at once, so code awaiting
+them (a task's cleanup) finishes instead of hanging. After a replug, open a new `MaschineMikroMk3`.
+Every write also has a timeout (`m.writeTimeout`, 1000 ms): Chrome can leave a write to an unplugged device pending forever.
 
 ## Lights
 
@@ -61,13 +64,20 @@ m.lights.removeLayer('grid');               // removeLayer() = all layers
 
 ```ts
 m.screen.set('Hello\nWorld');    // 2 lines, optional font size: set(text, 14)
-m.screen.blankAfter = 0;         // default: blank 3 s after the last set(); 0 = keep
+m.screen.draw((ctx, w, h) => {   // 128×32 OffscreenCanvas, cleared to black; white = lit
+  ctx.fillText('Steps', 0, 9);
+  ctx.fillRect(step * 8, 26, 8, 3);
+});
+m.screen.maxFps = 20;            // default; frames in between are merged (only the newest is sent)
+m.screen.blankAfter = 0;         // default: blank 3 s after the last set() / draw(); 0 = keep
 m.screen.hold(true);             // no blanking while a button is held; hold(false) restarts the countdown
 m.screen.idle('P1  3.2', x, y);  // small text instead of the blank (e.g. transport while playing); move it to wear the OLED evenly, null = off
 m.screen.clear();
+m.screen.stats;                  // { reports, frames, merged, unchanged }
 ```
 
-Identical frames are skipped, and only the newest pending frame is kept.
+Only the changed rectangle is sent. Identical frames are skipped, and only the newest pending frame is kept.
+Draw as often as you like (e.g. on every clock step): the driver caps and merges.
 
 ## Input
 
@@ -126,14 +136,19 @@ m.setButtonCallback((b) => {
 | | |
 |---|---|
 | Lights report (80 bytes) | 16 ms on the wire, so at most ~60 updates/s |
-| Screen frame (2 × 264 bytes) | ~80 ms |
+| Screen report (264 bytes, any rectangle ≤ 256 bytes) | ~38 ms |
+| Screen change within 2 rows of 8 px, or ≤ 64 px wide | 1 report: ~20 fps (measured with lights running) |
+| Screen change across the whole screen | 2 reports: ~10–13 fps |
 
 There's one report on the wire at a time. `MaschineMikroMk3` queues all output, with lights before screen, so an LED change waits at most
-for the screen half in flight (~46 ms worst case). **Don't redraw the screen on every input event** if latency matters.
+for the screen report in flight (~55 ms worst case measured, incl. its own 16 ms).
 
 ## Hardware facts
 
 - Pad LEDs: byte = 4 × color index + level. Raw level 0 is a dim light, not off; byte 0 is off.
+- Screen report 0xE0: header `x, 0, page, 0, width, 0, pages, 0` (page = 8-pixel row, 0–3) + the rectangle's bytes page by page,
+  LSB = top pixel, bit set = off. Any rectangle works, but the report must be the **full 264 bytes** (pad it): shorter
+  reports get paired up, the device draws the first and swallows the next as its tail (verified on camera, lab mode `screen-rects`).
 - Button LEDs: bytes 0–3 and ≥ 128 are off. Brightness is in the low 2 bits, in the order `01 < 00 < 10 < 11` (hence `BUTTON_BRIGHTNESS = [0, 13, 12, 10, 11]`).
 - Report layouts are documented in [`buttons.ts`](buttons.ts), [`pads.ts`](pads.ts), [`lights.ts`](lights.ts), and [`screen.ts`](screen.ts).
 

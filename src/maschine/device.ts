@@ -37,6 +37,9 @@ export class MaschineMikroMk3 {
     // one screen half ≈ 38 ms). Lights go first, so they wait at most for the screen half in flight.
     private queue: QueuedReport[] = [];
     private writing = false;
+    private closed = false;
+    /** A write that takes longer fails (an unplugged device can leave sendReport pending forever, blocking the queue). */
+    writeTimeout = 1000;
 
     constructor() {
         this.buttons = new Buttons(BUTTONS);
@@ -93,8 +96,26 @@ export class MaschineMikroMk3 {
         return this.hid;
     }
 
+    /**
+     * The device is gone (unplugged) or no longer used: queued and later writes fail right away, input stops.
+     * Call it on the HID 'disconnect' event, so tasks waiting on writes finish their cleanup instead of hanging.
+     */
+    close(): void {
+        if (this.closed) return;
+        this.closed = true;
+        const error = new Error('Device disconnected');
+        for (const job of this.queue.splice(0)) job.reject(error);
+        // input off; no hid.close(): Chrome may hand the same HIDDevice object to the next driver after a replug
+        if (this.hid) this.hid.oninputreport = null;
+    }
+
+    get isClosed(): boolean {
+        return this.closed;
+    }
+
     /** Queues an output report. Resolves when it was written. */
     sendReport(reportId: number, data: Uint8Array<ArrayBuffer>, priority: Priority = Priority.Lights): Promise<void> {
+        if (this.closed) return Promise.reject(new Error('Device disconnected'));
         return new Promise((resolve, reject) => {
             this.queue.push({ priority, reportId, data, resolve, reject });
             this.drain();
@@ -113,8 +134,8 @@ export class MaschineMikroMk3 {
 
                 const t0 = performance.now();
                 try {
-                    if (!this.hid) throw new Error('Device not connected');
-                    await this.hid.sendReport(job.reportId, job.data);
+                    if (!this.hid || this.closed) throw new Error('Device not connected');
+                    await withTimeout(this.hid.sendReport(job.reportId, job.data), this.writeTimeout);
                     this.onWrite?.(job.reportId, job.data.byteLength, performance.now() - t0);
                     job.resolve();
                 } catch (error) {
@@ -126,4 +147,13 @@ export class MaschineMikroMk3 {
             this.writing = false;
         }
     }
+}
+
+/** Rejects if `promise` doesn't settle within `ms`. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Write timeout (${ms} ms)`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }

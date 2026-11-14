@@ -16,8 +16,48 @@ export interface Param {
     value(): string;
     /** Encoder turn, delta in encoder steps. */
     step(delta: number): void;
+    /** Value bar on the display (null / missing = text only). */
+    bar?(): Bar | null;
     /** Cheat sheet text (default: the name). */
     help?: string;
+}
+
+/**
+ * Display value bar: `value` 0..1. `from` = where the fill starts (0.5 = bipolar, e.g. octave ±);
+ * `steps` = a choice out of n (kind, scale, …): the selected segment is filled instead.
+ */
+export interface Bar {
+    value: number;
+    from?: number;
+    steps?: number;
+}
+
+/** Bar for a choice: index out of a list of n. */
+export const choiceBar = (index: number, n: number): Bar | null => (index < 0 ? null : { value: n > 1 ? index / (n - 1) : 0, steps: n });
+/** Bar for a value in min..max. */
+export const rangeBar = (v: number, min: number, max: number, from?: number): Bar => ({
+    value: Math.min(1, Math.max(0, (v - min) / (max - min))),
+    from: from === undefined ? undefined : (from - min) / (max - min),
+});
+
+/** Draws the bar in the bottom 4 pixel rows (28–31): a dotted track line, the fill (or the selected segment) on top. */
+export function drawBar(ctx: OffscreenCanvasRenderingContext2D, width: number, bar: Bar): void {
+    const y = 28;
+    const h = 4;
+    for (let x = 0; x < width; x += 2) ctx.fillRect(x, y + h - 1, 1, 1); // track
+    const v = Math.min(1, Math.max(0, bar.value));
+    if (bar.steps && bar.steps > 1) {
+        const seg = width / bar.steps;
+        for (let i = 1; i < bar.steps; i++) ctx.fillRect(Math.round(i * seg), y + 1, 1, h - 1); // segment ticks
+        const i = Math.round(v * (bar.steps - 1));
+        ctx.fillRect(Math.round(i * seg) + 1, y, Math.max(1, Math.round(seg) - 2), h);
+        return;
+    }
+    const from = bar.from ?? 0;
+    if (bar.from !== undefined) ctx.fillRect(Math.round(from * (width - 1)), y - 2, 1, h + 2); // center mark
+    const x0 = Math.round(Math.min(from, v) * width);
+    const x1 = Math.round(Math.max(from, v) * width);
+    ctx.fillRect(x0, y, Math.max(1, x1 - x0), h);
 }
 
 export interface Help {
@@ -74,7 +114,7 @@ export class Pages {
 
     constructor(
         readonly all: readonly Page[],
-        private say: (text: string) => void,
+        private say: (text: string, bar?: Bar | null) => void,
     ) {
         this.byButton = new Map(all.map((p) => [p.button, p]));
     }
@@ -200,7 +240,8 @@ export class Pages {
         if (!params.length) return this.say(page.hint ? `${page.name}\n${page.hint}` : page.name);
         const i = this.index(page);
         const param = params[i];
-        if (params.length === 1) return this.say(`${page.name}\n${param.value()}`);
-        this.say(`${page.name}  ${i + 1}/${params.length}\n${param.name}: ${param.value()}`);
+        const bar = param.bar?.() ?? null;
+        if (params.length === 1) return this.say(`${page.name}\n${param.value()}`, bar);
+        this.say(`${page.name}  ${i + 1}/${params.length}\n${param.name}: ${param.value()}`, bar);
     }
 }

@@ -12,7 +12,7 @@ Two hands: one holds, the other picks / turns / taps.
 
 | Control | Role on every page |
 |---|---|
-| Page button held | The page is active. The display shows the page and the current parameter as `name: value` (shown while held, blanks 3 s after release). |
+| Page button held | The page is active. The display shows the page and the current parameter as `name: value` with a value bar (shown while held, blanks 3 s after release). |
 | `< >` | Pick the parameter. |
 | Encoder turn | Change the value. |
 | Encoder push | Do it / apply (e.g. generate). |
@@ -63,7 +63,22 @@ Rules:
 - [ ] Sound visualizer (scope / spectrum of the master, from the meter analysers).
 - [ ] Chain view (the 16 patterns + the chain, click to queue / edit).
 - [ ] WAV recording of the master (MediaRecorder): keep a jam.
-- [ ] Song file save / load (JSON): backup, move songs between computers.
+- [ ] Song sharing: file download / load (JSON: backup, move songs between computers) and share as URL.
+  - Measured: the full `Song` JSON is ~110–120 KB even when nearly empty (every slot stored: 16 × 16 pattern tracks
+    with 8 × 16 drum velocities each), plain base64 ~150–160 K chars. gzip + base64: new song ~1.4 K chars, all 16
+    patterns × 16 tracks filled with random steps ~16 K (brotli ~0.6 K / ~14.5 K).
+  - URL: `#/muop?song=<gzip+base64url>`, built-in `CompressionStream('gzip')` / `DecompressionStream`, no library.
+    Chrome takes ~2 MB URLs; chat apps / QR codes (≤ ~2.9 KB) are tighter.
+  - Shorter: a sparse share format (only non-empty patterns / tracks, drum hits as `[sound, step, vel]`, params only
+    where set) → a typical song a few hundred chars before compression. Expand back to a full `Song` on load, like `migrateV1()` does for v1.
+  - Optional: include the STAR favorites (separate localStorage) used by the song's tracks.
+  - Version everything: the song keeps its `version` field (now 2, bump it on breaking model changes and add a
+    migration step), and the share format gets its own tag in front of the payload, e.g. `song=1.<data>`
+    (1 = gzip JSON, 2 = sparse, …), so an old link is decoded with the right decoder. Files: `{ app: 'muop',
+    format: 1, song }`. A newer version than the app knows → a clear "made with a newer μOp" message, not a broken song.
+  - Import goes through the same checks + defaults as `loadSong()` (pull them out into one `parseSong()`), so old
+    files / links keep working.
+  - On load from URL: ask before replacing the current song (undo / keep a backup of the old one).
 - [ ] Computer keyboard shortcuts (space = play, …).
 - [ ] MIDI routing presets per synth (port, channel, which tracks), app only.
 - [ ] Mixer: MIDI ↔ internal switch in the strip; MIDI tracks: fader sends CC 7 (volume) to the synth.
@@ -83,22 +98,7 @@ Rules:
   - Auto density curve: with Auto on, density walks down over n bars and snaps back (build-up / breakdown).
 
 ### 4. Sounds
-- [ ] PLUG-IN page: strip = macro / morph.
-- [ ] Sound tuning: rework the sounds that feel weak (needs listening feedback, `src/engine/instruments/`).
-- [ ] More engines: samples (drum kits as WAV/OGG one-shots), smplr, Faust / AudioWorklet.
-- [ ] Keep it simple? Plug in an FM1 and do the MIDI thing (MIDI out + audio inputs work now); MIDI / audio routing
-  presets for your fav synth (app only, see 1).
-- [ ] Mutable Instruments DSP as engines (`../MI-Eurorack`, STM32 projects = **MIT**, keep the copyright notice; don't use
-  the brand / module names as product names). C++ → WebAssembly (Emscripten, not installed yet; commit the built `.wasm`)
-  → AudioWorklet node per track, behind the existing `Melodic` / `DrumKit` contract (SEARCH / STAR / page select work as is).
-  - **Plaits** first: float DSP at 48 kHz, 16 engines incl. bass drum / snare / hi-hat models → melodic instruments + a
-    drum kit from one port. Monophonic: one instance per voice (chords). Harmonics / timbre / morph → PLUG-IN page
-    parameters, strip for live morph.
-  - **Rings** (resonator, 48 kHz): pads / plucks, also as an effect on other tracks.
-  - **Elements** (32 kHz internal, heavier CPU): one voice per track, needs resampling.
-  - **Braids** (96 kHz, integer DSP): low priority, Plaits covers most of it.
-  - Watch: sample-accurate note starts inside the 128-sample worklet block (Plaits renders 12–24-sample blocks),
-    wasm size (speech / wavetable data).
+Moved to [TASK-SOUNDS.md](TASK-SOUNDS.md) (engines, sound tuning, plugins).
 
 ## Later
 
@@ -110,7 +110,6 @@ Rules:
   then PLUG-IN + push randomizes the sound); Grids-style drum map (own data, Grids is GPL-3.0) if the Marbles-style
   drums aren't enough.
 - **Notes:** per-track Poly setting (SELECT page) to let notes overlap (pads, drones).
-- **Sounds:** keep the "(edited)" browser entry across reloads (store it in the song).
 - **PERFORM:** strip = FX amount, FX settings on `< >`, more track FX (octave up, random steps), per-track sends
   instead of the whole mix.
 - **SHIFT functions that need features first:**

@@ -40,6 +40,8 @@ export function useDeviceTask(maschine: MaschineMikroMk3 | null, task: DeviceTas
                 await release(maschine);
             }
         })().catch((error) => {
+            // an unplug ends the task with failed writes: expected, not an error
+            if (maschine.isClosed) return devlog('task', { task: name, ended: 'device disconnected' });
             console.error(`${name} failed:`, error);
             devlog('error', { task: name, error: String(error) });
         });

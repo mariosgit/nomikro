@@ -11,6 +11,9 @@ It is not supposed to become a full fledged Music studio.
 The sounds should be produced in chrome, i'm sure there is some engine for that...
 Also keep the posibility to output MIDI via the midi api, so sounds can be played on external gear.
 
+---
+
+When a task is given, look for it's description in the tasks folder. It contains .md files. Names starting with DONE- or TASK-, TASK-s are current things to do, the DONE files can be used as reference to past aktivities.
 
 ---
 
@@ -60,7 +63,8 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
   SHIFT dim when the app has SHIFT combos. Modifiers (hold + pad / encoder) light bright while held.
 - **Guide on the app page:** a "Controls" cheat sheet listing every button / pad / encoder / strip function,
   incl. SHIFT + TAP and the light meaning. Keep it in sync with the mapping.
-- **Display:** short message on every change (`screen.set`, debounced), it auto-blanks after 3 s. Never on every input event.
+- **Display:** short message on every change (`screen.set`; the driver caps it at 20 fps and sends only the changed area, no debounce needed),
+  it auto-blanks after 3 s. Graphics via `screen.draw(ctx => …)`. Keep the blanking (aged OLED): no permanent animations.
 - **Audio:** show "click to enable audio" on the page while the AudioContext isn't running (pads don't unlock it).
 - **Device ownership:** drive the device via `useDeviceTask()`; use light layers (`m.lights.layer()`) for grid / playhead /
   feedback so they don't wipe each other.
@@ -79,7 +83,8 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
   `mode=replay&from=HH:MM:SS&to=HH:MM:SS[&speed=4]` re-plays recorded input with original timing through the real
   code path (`injectInput`), so input bugs can be reproduced without hands.
 - `mode=bench` measures write timing, `mode=stress` checks for lost lights reports (should end all green).
-- Modes: `show`, `demo`, `pad-levels`, `strip`, `buttons`, `input`, `events` (m.input edges/held state, `on`/`off`/`full` params), `layers` (light layers + held pads), `clock` (metronome + playhead, timing stats per bar, `bpm`/`swing`), `replay`, `bench`, `stress`, `off`.
+- Modes: `show`, `demo`, `pad-levels`, `strip`, `buttons`, `input`, `events` (m.input edges/held state, `on`/`off`/`full` params), `layers` (light layers + held pads), `clock` (metronome + playhead, timing stats per bar, `bpm`/`swing`), `screen-fps` (screen animation: fps, reports/frame,
+  lights latency; `scene=grid|bar|full|text`, `fps`), `screen-rects` (raw rectangle reports, `rects=x:page:w:pages,…`, `pad=1`), `replay`, `bench`, `stress`, `off`.
 
 1. The dev server is usually already running (`npm start` → http://localhost:9000, Chrome/Chromium for WebHID).
    Check before starting another one: `ss -ltnp | grep 9000`.
@@ -92,7 +97,25 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
 
 ## Camera feedback
 
-(might be available on linux dev machine)
+macOS: the iPhone (Continuity Camera, "mbip Camera") hangs above the desk looking down at the whole device, upright
+(display top left, ~150 px wide for its 128 px; only the outer edge of the right pad column may be cut off). It asks for permission on **every** new capture process, so keep
+**one** ffmpeg running in the background that overwrites a frame twice a second, and take shots from that file:
+
+```
+mkdir -p <scratchpad>/cam && cd <scratchpad>/cam && \
+  ffmpeg -f avfoundation -pixel_format nv12 -framerate 30 -i "mbip Camera" -vf fps=2 -q:v 3 -update 1 -y latest.jpg   # run_in_background
+# display close-up (crop w:h:x:y needs adjusting when the phone moved; check the full latest.jpg first):
+ffmpeg -i <scratchpad>/cam/latest.jpg -vf "crop=200:80:170:243,scale=-1:240:flags=lanczos" shot.jpg
+```
+
+- Use the device name, not the index (`-list_devices true -i ""` lists them; indexes change). "mbip Desk View Camera"
+  sees the OLED too flat (pale rectangle), the FaceTime camera only sometimes sees the device.
+- No zoom / focus / exposure control: macOS has no zoom API, the iPhone exposes no manual modes over Continuity
+  (checked with AVFoundation), max 1920×1440. Framing = where the phone is.
+- **The image lags ~1–1.5 s** (Continuity + 2 fps): wait ~2 s after a change before reading `latest.jpg`.
+- The OLED shows faint burn-in ("Pad / Val: 58"), that's not output.
+
+Linux (`/dev/video0`):
 
 Single shot (creates `shot001.jpg`; skips 15 frames so exposure settles):
 
@@ -124,8 +147,11 @@ ffmpeg -i seq%02d.jpg -vf "tile=4x2" -frames:v 1 contact.jpg
 - Touch strip: 25 LEDs (`strip` 0–24, left → right). Touch position 1–200 left → right, 0 = not touched (`STRIP_MAX`).
 - Pad/strip level 1–3 (0 = off), byte = 4 × colorIndex + level. Raw level 0 is *not* off (dim); byte 0 is off. `Lights` clamps levels.
 - Buttons: brightness 0–4, no color. Raw bytes 0–3 and ≥128 = off, otherwise the low 2 bits count: `01 < 00 < 10 < 11` (hence the table 13, 12, 10, 11). `enc-push` / `enc-touched` have no LED; their indexes land on pad LEDs, so skip them.
-- Output timing (measured): LED report 16 ms, screen frame 2 × ~38 ms, one report on the wire at a time.
-  `MaschineMikroMk3` queues all writes, lights first. Don't redraw the screen on every input event.
+- Output timing (measured): LED report 16 ms, screen report ~38 ms, one report on the wire at a time.
+  `MaschineMikroMk3` queues all writes, lights first.
+- Screen report 0xE0 takes any rectangle (header x / page / width / pages), but must always be the full 264 bytes:
+  short reports get paired up (the first is drawn, the next swallowed). `Screen` sends only the changed rectangle,
+  capped at `maxFps` 20: changes within 2 rows (8 px each) or ≤ 64 px wide ≈ 20 fps, whole screen ≈ 10 fps. `screen.draw(ctx => …)` for graphics.
 - Lights report 0x80 is **80 bytes** (descriptor). Button report: see `src/maschine/buttons.ts` (byte 6 encoder, 9 strip).
 - Display shows the current scene name (`maschine.screen.set`), auto-blanks after 3 s.
 - Display is an aged OLED (ssd1303 or so) it shall blank after some seconds to save it...

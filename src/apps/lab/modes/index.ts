@@ -2,6 +2,7 @@
 // Switch from the page, or from the terminal: curl 'localhost:9000/__hw/run?mode=buttons&values=1,2,4'
 import { runLightShow } from './lightshow';
 import { TEST_MODES } from './tests';
+import { screenFps, screenProbe } from './screenprobe';
 import { untilAborted, type Mode } from './types';
 
 export type { Mode, ModeContext } from './types';
@@ -41,6 +42,9 @@ export const MODES = {
     },
 
     ...TEST_MODES,
+
+    'screen-fps': screenFps,
+    'screen-rects': screenProbe,
 
     off: {
         label: 'Off',

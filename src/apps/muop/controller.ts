@@ -42,7 +42,7 @@ import { devlog } from '../../dev/devlog';
 import { Metronome } from '../../engine/metronome';
 import { DRUM_SOUNDS, soundsFor, type Sounds } from './sounds';
 import { findInstrument, formatParam, randomParam, stepParam, type ParamDef, type Params, type Voice } from '../../engine/instruments';
-import { Pages, TAP_MS, type Cell, type Help, type Page, type Param } from './page';
+import { Pages, TAP_MS, choiceBar, drawBar, rangeBar, type Bar, type Cell, type Help, type Page, type Param } from './page';
 import { addFavorite, favoriteOf, favorites, indexIn, removeFavorite, soundList, type SoundEntry } from './favorites';
 import { History } from './history';
 import { Inputs } from './inputs';
@@ -196,7 +196,6 @@ export class MuOpController {
     private listeners = new Set<() => void>();
     private notifyQueued = false;
     private saveTimer: ReturnType<typeof setTimeout> | undefined;
-    private sayTimer: ReturnType<typeof setTimeout> | undefined;
 
     constructor(
         private m: MaschineMikroMk3,
@@ -210,7 +209,7 @@ export class MuOpController {
             this.history.edit(pattern);
             this.saveSoon();
         };
-        this.pages = new Pages(MuOpController.definePages(this), (text) => this.say(text));
+        this.pages = new Pages(MuOpController.definePages(this), (text, bar) => this.say(text, bar));
         this.grid = m.lights.layer('grid');
         this.playhead = m.lights.layer('playhead');
         this.flashLayer = m.lights.layer('flash');
@@ -267,7 +266,6 @@ export class MuOpController {
             this.seq.stop();
             for (const voices of this.liveVoices.values()) for (const v of voices) v.release();
             for (const t of this.flashTimers.values()) clearTimeout(t);
-            clearTimeout(this.sayTimer);
             clearTimeout(this.saveTimer);
             saveSong(this.song);
             this.inputs.dispose();
@@ -473,10 +471,17 @@ export class MuOpController {
         const held = (b: LedButton) => c.m.input.isHeld(b);
 
         /** A setting of the selected track, shown as "value  T3". */
-        const setting = (name: string, help: string, show: (t: Track) => string, step: (t: Track, d: number) => TrackSettings | null) => ({
+        const setting = (
+            name: string,
+            help: string,
+            show: (t: Track) => string,
+            step: (t: Track, d: number) => TrackSettings | null,
+            bar?: (t: Track) => Bar | null,
+        ): Param => ({
             name,
             help,
             value: () => `${show(c.cur)}  T${c.track + 1}`,
+            bar: bar && (() => bar(c.cur)),
             step: (d: number) => {
                 const patch = step(c.cur, Math.sign(d));
                 if (patch) c.setTrack(c.track, patch);
@@ -486,18 +491,40 @@ export class MuOpController {
             button: 'select',
             name: 'Track',
             params: [
-                setting('Kind', 'kind (empty / drums / notes / chords: fills an empty track)', (t) => kindName(t.kind), (t, d) => ({
-                    kind: KINDS[clamp(KINDS.indexOf(t.kind) + d, 0, KINDS.length - 1)],
-                })),
-                setting('Octave', 'octave', (t) => (t.kind === 'drums' ? '–' : `${t.octave > 0 ? '+' : ''}${t.octave}`), (t, d) =>
-                    t.kind === 'drums' ? null : { octave: t.octave + d },
+                setting(
+                    'Kind',
+                    'kind (empty / drums / notes / chords: fills an empty track)',
+                    (t) => kindName(t.kind),
+                    (t, d) => ({ kind: KINDS[clamp(KINDS.indexOf(t.kind) + d, 0, KINDS.length - 1)] }),
+                    (t) => choiceBar(KINDS.indexOf(t.kind), KINDS.length),
                 ),
-                setting('Clock', 'clock ÷16 … ×2 (steps per 16th)', (t) => rateName(t.rate), (t, d) => ({
-                    rate: RATES[clamp(RATES.indexOf(t.rate as (typeof RATES)[number]) + d, 0, RATES.length - 1)],
-                })),
-                setting('Length', 'length 1–16 steps', (t) => `${t.length} steps`, (t, d) => ({ length: t.length + d })),
-                setting('Harmony', 'harmony (notes tracks: free / transpose / follow the chords track)', (t) => (t.kind === 'notes' ? t.harmony : '–'), (t, d) =>
-                    t.kind === 'notes' ? { harmony: HARMONY_MODES[clamp(HARMONY_MODES.indexOf(t.harmony) + d, 0, HARMONY_MODES.length - 1)] } : null,
+                setting(
+                    'Octave',
+                    'octave',
+                    (t) => (t.kind === 'drums' ? '–' : `${t.octave > 0 ? '+' : ''}${t.octave}`),
+                    (t, d) => (t.kind === 'drums' ? null : { octave: t.octave + d }),
+                    (t) => (t.kind === 'drums' ? null : rangeBar(t.octave, -3, 3, 0)),
+                ),
+                setting(
+                    'Clock',
+                    'clock ÷16 … ×2 (steps per 16th)',
+                    (t) => rateName(t.rate),
+                    (t, d) => ({ rate: RATES[clamp(RATES.indexOf(t.rate as (typeof RATES)[number]) + d, 0, RATES.length - 1)] }),
+                    (t) => choiceBar(RATES.indexOf(t.rate as (typeof RATES)[number]), RATES.length),
+                ),
+                setting(
+                    'Length',
+                    'length 1–16 steps',
+                    (t) => `${t.length} steps`,
+                    (t, d) => ({ length: t.length + d }),
+                    (t) => ({ value: t.length / STEPS }),
+                ),
+                setting(
+                    'Harmony',
+                    'harmony (notes tracks: free / transpose / follow the chords track)',
+                    (t) => (t.kind === 'notes' ? t.harmony : '–'),
+                    (t, d) => (t.kind === 'notes' ? { harmony: HARMONY_MODES[clamp(HARMONY_MODES.indexOf(t.harmony) + d, 0, HARMONY_MODES.length - 1)] } : null),
+                    (t) => (t.kind === 'notes' ? choiceBar(HARMONY_MODES.indexOf(t.harmony), HARMONY_MODES.length) : null),
                 ),
             ],
             cells: () => c.song.tracks.map((t, i) => (i === c.track ? { color: 'white', level: 3 } : t.kind ? { color: trackColor(t), level: 1 } : OFF)),
@@ -584,6 +611,7 @@ export class MuOpController {
                     name: 'Tempo',
                     help: 'Tempo 40–240 BPM',
                     value: () => `${c.song.bpm} BPM`,
+                    bar: () => rangeBar(c.song.bpm, 40, 240),
                     step: (d) => {
                         c.song.bpm = clamp(c.song.bpm + d, 40, 240);
                         c.seq.clock.bpm = c.song.bpm;
@@ -601,6 +629,7 @@ export class MuOpController {
                     name: 'Swing',
                     help: 'Swing 50–75 %',
                     value: () => `${c.song.swing}%`,
+                    bar: () => rangeBar(c.song.swing, 50, 75),
                     step: (d) => {
                         c.song.swing = clamp(c.song.swing + d, 50, 75);
                         c.seq.clock.swing = c.song.swing;
@@ -618,6 +647,7 @@ export class MuOpController {
                     name: 'Track',
                     help: 'Volume of the current track (saved in the song)',
                     value: () => (c.cur.kind ? `${pct(c.cur.level)}  T${c.track + 1}` : '–'),
+                    bar: () => (c.cur.kind ? rangeBar(c.cur.level, 0, 1.5) : null),
                     step: (d) => {
                         const t = c.cur;
                         if (!t.kind) return;
@@ -630,6 +660,7 @@ export class MuOpController {
                     name: 'Master',
                     help: 'master volume',
                     value: () => pct(c.song.volume),
+                    bar: () => rangeBar(c.song.volume, 0, 1),
                     step: (d) => {
                         c.song.volume = clamp(Math.round((c.song.volume + d * 0.02) * 100) / 100, 0, 1);
                         c.sounds.volume = c.song.volume;
@@ -670,6 +701,7 @@ export class MuOpController {
                     ...c.shownParams().map((def) => ({
                         name: def.name,
                         value: () => formatParam(def, c.paramValue(def)),
+                        bar: () => paramBar(def, c.paramValue(def)),
                         step: (d: number) => c.setParam(c.track, def, stepParam(def, c.paramValue(def), d)),
                     })),
                 ];
@@ -767,6 +799,7 @@ export class MuOpController {
             name,
             help,
             value: () => (c.cur.kind && when.includes(c.cur.kind) ? `${pct(c.generator(c.track).settings[key])}%` : '–'),
+            bar: () => (c.cur.kind && when.includes(c.cur.kind) ? { value: c.generator(c.track).settings[key] } : null),
             step: (d: number) => {
                 const g = c.generator(c.track).settings;
                 g[key] = clamp(Math.round((g[key] + d * 0.05) * 20) / 20, 0, 1);
@@ -792,6 +825,7 @@ export class MuOpController {
                         const n = c.generator(c.track).settings.auto;
                         return n ? `every ${n} bar${n > 1 ? 's' : ''}` : 'off';
                     },
+                    bar: () => choiceBar(AUTO_BARS.indexOf(c.generator(c.track).settings.auto as (typeof AUTO_BARS)[number]), AUTO_BARS.length),
                     step: (d) => {
                         const g = c.generator(c.track).settings;
                         g.auto = AUTO_BARS[clamp(AUTO_BARS.indexOf(g.auto as (typeof AUTO_BARS)[number]) + Math.sign(d), 0, AUTO_BARS.length - 1)];
@@ -830,18 +864,21 @@ export class MuOpController {
                     name: 'Root',
                     help: 'song root C…B (also SHIFT + pad 13 / 14)',
                     value: () => NOTE_NAMES[c.song.root],
+                    bar: () => choiceBar(c.song.root, 12),
                     step: (d) => c.setKey({ root: c.song.root + d }),
                 },
                 {
                     name: 'Scale',
                     help: 'scale (minor, major, modes, pentatonic)',
                     value: () => findScale(c.song.scale).name,
+                    bar: () => choiceBar(SCALES.findIndex((x) => x.id === c.song.scale), SCALES.length),
                     step: (d) => c.setKey({ scale: SCALES[clamp(SCALES.findIndex((x) => x.id === c.song.scale) + d, 0, SCALES.length - 1)].id }),
                 },
                 {
                     name: 'Voicing',
                     help: 'voicing of the chords track (close, 1st / 2nd inversion, open, sus2, sus4)',
                     value: () => (chordsTrack() < 0 ? '–' : VOICINGS[c.song.tracks[chordsTrack()].voicing]),
+                    bar: () => (chordsTrack() < 0 ? null : choiceBar(c.song.tracks[chordsTrack()].voicing, VOICINGS.length)),
                     step: (d) => {
                         const t = chordsTrack();
                         if (t >= 0) c.setTrack(t, { voicing: c.song.tracks[t].voicing + d });
@@ -1438,7 +1475,7 @@ export class MuOpController {
         }
         const lit = this.pages.lights(levels, (b) => input.isHeld(b));
         for (const b of LED_BUTTONS) l.button(b, lit.get(b) ?? 0);
-        l.flush();
+        l.flush().catch(ignore);
 
         if (showHead) cells[head] = { color: 'white', level: 3 };
         this.view = this.makeView(cells);
@@ -1457,7 +1494,7 @@ export class MuOpController {
                     this.flashTimers.delete(pad);
                     if (!this.m.input.isPadHeld(pad)) {
                         this.flashLayer.pad(pad, 'off');
-                        this.m.lights.flush();
+                        this.m.lights.flush().catch(ignore);
                     }
                 }, ms),
             );
@@ -1469,12 +1506,21 @@ export class MuOpController {
         this.stripValue(position ? (position - 1) / (STRIP_MAX - 1) : null);
     }
 
-    /** Display text (debounced: a frame costs ~80 ms on the wire). */
-    private say(text: string): void {
+    /**
+     * Display text, optionally with a value bar (page parameters). No debounce needed: the driver caps the frame rate
+     * and sends only the newest frame / changed area (encoder turns change line 2 + the bar: one report, ~20 fps).
+     */
+    private say(text: string, bar?: Bar | null): void {
         this.message = text;
         devlog('event', { app: 'muop', line: text.replace('\n', ' · ') });
-        clearTimeout(this.sayTimer);
-        this.sayTimer = setTimeout(() => this.m.screen.set(text), 30);
+        if (!bar) return void this.m.screen.set(text).catch(ignore);
+        const [line1, line2 = ''] = text.split('\n');
+        this.m.screen.draw((ctx, w) => {
+            ctx.font = '12px monospace';
+            ctx.fillText(line1, 0, 10);
+            ctx.fillText(line2, 0, 24);
+            drawBar(ctx, w, bar);
+        }).catch(ignore);
     }
 
     private saveSoon(): void {
@@ -1600,3 +1646,13 @@ export class MuOpController {
         });
     }
 }
+
+/** Bar for an instrument parameter: choice for options, log scale where the parameter is log, bipolar if it spans 0. */
+function paramBar(def: ParamDef, v: number): Bar {
+    if (def.options) return choiceBar(Math.round(v), def.options.length) ?? { value: 0 };
+    if (def.log && def.min > 0) return { value: Math.log(v / def.min) / Math.log(def.max / def.min) };
+    return rangeBar(v, def.min, def.max, def.min < 0 && def.max > 0 ? 0 : undefined);
+}
+
+/** For fire-and-forget device writes: they only fail when the device was unplugged (the shell restarts the task then). */
+const ignore = () => {};
