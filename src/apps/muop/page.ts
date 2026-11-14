@@ -230,6 +230,11 @@ export class Pages {
         });
     }
 
+    /** The page's current `< >` parameter (e.g. for an apply that depends on it). */
+    currentParam(page: Page): number {
+        return this.index(page);
+    }
+
     private index(page: Page): number {
         return Math.min(this.paramIndex.get(page) ?? 0, Math.max(0, (page.params?.length ?? 1) - 1));
     }

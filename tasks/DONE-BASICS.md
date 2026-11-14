@@ -1,6 +1,6 @@
 # Basics - done
 
-The driver basics, moved here from [TASK-BASICS.md](TASK-BASICS.md) (open items stay there).
+The driver basics. All done, TASK-BASICS.md is closed (2026-11-14).
 How the driver works, measured timing and hardware facts: [`src/maschine/README.md`](../src/maschine/README.md) and
 [`CLAUDE.md`](../CLAUDE.md). The review history (bugs found + fixed, test rounds) is in the git history of TASK-BASICS.md.
 
@@ -72,3 +72,14 @@ coalesced), pad input (multi-pad reports, pressure), buttons / encoder / touch s
   not as an error; μOp / screen-fps catch their fire-and-forget writes.
 - [x] Tested by hand: unplug / replug while lab `screen-fps` and while μOp ran: both restart by themselves (log: `connected`
   → `task` right after).
+
+## Closing (2026-11-14)
+
+- [x] **Long-run test:** light show for 30 min (`bench` before / after, then `stress`): no errors, no write timeouts in the log.
+  Bench before → after: lights report 16.0 → 16.2 ms, screen report 36.9 → 37.9 ms, lights latency during screen writes
+  49–51 → 49–50 ms. Stress (40 rounds, screen on): all pads green (no lost lights reports).
+- Dropped: **unit tests** for the decoders / LED mapping. Finished, verified on the device, rarely touched, and the
+  `replay` lab mode re-runs recorded input through the real code path. Tests would pay off for changing logic
+  (μOp harmony / variation, song load / migration), not here.
+- Dropped: the step grid + playhead on the display (the pads show it already).
+- Known limits moved to [`CLAUDE.md`](../CLAUDE.md) ("Known limits").

@@ -108,15 +108,19 @@ export interface Song {
 export type Key = Pick<Song, 'root' | 'scale'>;
 
 const TRACK_DEFAULTS = { rate: 1, length: STEPS, midi: null, harmony: 'free', voicing: 0, mute: false, solo: false } as const;
-const emptyTrack = (n: number): Track => ({ kind: null, name: `Track ${n + 1}`, sound: '', params: {}, level: 1, octave: 0, ...TRACK_DEFAULTS });
+/** An unused track slot (hidden in the track list). */
+export const emptyTrack = (n: number): Track => ({ kind: null, name: `Track ${n + 1}`, sound: '', params: {}, level: 1, octave: 0, ...TRACK_DEFAULTS });
 
-/** Tracks 1–4 of a new song. */
+/** New songs: Drums, Bass, Lead, Chords (the chords track drives the harmony wherever it is). */
 const DEFAULT_TRACKS: Track[] = [
     { kind: 'drums', name: 'Drums', sound: 'tone', params: {}, level: 1, octave: 0, ...TRACK_DEFAULTS },
     { kind: 'notes', name: 'Bass', sound: 'basic-lead', params: {}, level: 1, octave: -1, ...TRACK_DEFAULTS },
-    { kind: 'chords', name: 'Chords', sound: 'tone-pad', params: {}, level: 0.8, octave: 0, ...TRACK_DEFAULTS },
     { kind: 'notes', name: 'Lead', sound: 'tone-mono', params: {}, level: 1, octave: 0, ...TRACK_DEFAULTS },
+    { kind: 'chords', name: 'Chords', sound: 'tone-pad', params: {}, level: 0.8, octave: 0, ...TRACK_DEFAULTS },
 ];
+
+/** The Lead track's index in new songs (v1 songs: melody → Lead). */
+const LEAD = 2;
 
 export const emptyPatternTrack = (): PatternTrack => ({
     drums: Array.from({ length: DRUMS }, () => Array<number>(STEPS).fill(0)),
@@ -142,7 +146,7 @@ export const isEmptyPattern = (p: Pattern) => p.tracks.every(isEmptyTrack) && p.
 /** A new song with a starter groove in pattern 1. */
 export function newSong(): Song {
     const patterns = Array.from({ length: PATTERNS }, emptyPattern);
-    const [drums, bass, chords, lead] = patterns[0].tracks;
+    const [drums, bass, lead, chords] = patterns[0].tracks;
     for (const s of [0, 6, 10]) drums.drums[0][s] = 1; // kick
     for (const s of [4, 12]) drums.drums[1][s] = 0.9; // snare
     for (let s = 0; s < STEPS; s += 2) drums.drums[2][s] = s % 4 === 0 ? 0.7 : 0.4; // closed hat
@@ -240,7 +244,7 @@ export function chordName(chord: number, key: Key, voicing = 0): string {
     return mod(bass, 12) === mod(notes[0], 12) ? name : `${name}/${NOTE_NAMES[mod(bass, 12)]}`;
 }
 
-// --- persistence (browser localStorage) ---
+// --- persistence: parsing stored / imported songs (storage itself: projects.ts) ---
 
 const KEY = 'muop/song/v2';
 const KEY_V1 = 'muop/song/v1';
@@ -266,57 +270,56 @@ function migrateV1(old: SongV1): Song {
     song.patterns = old.patterns.map((p) => {
         const pattern = emptyPattern();
         pattern.tracks[0].drums = p.drums.map((row) => [...row]);
-        pattern.tracks[3].notes = [...p.melody];
+        pattern.tracks[LEAD].notes = [...p.melody];
         return pattern;
     });
     if (old.sounds?.drums) song.tracks[0].sound = old.sounds.drums;
-    if (old.sounds?.melody) song.tracks[3].sound = old.sounds.melody;
+    if (old.sounds?.melody) song.tracks[LEAD].sound = old.sounds.melody;
     song.tracks[0].level = old.levels?.drums ?? 1;
-    song.tracks[3].level = old.levels?.melody ?? 1;
+    song.tracks[LEAD].level = old.levels?.melody ?? 1;
     return song;
 }
 
-export function loadSong(): Song {
-    try {
-        const raw = localStorage.getItem(KEY);
-        if (raw) {
-            const s = JSON.parse(raw) as Song;
-            if (s.version === 2 && s.tracks?.length === TRACKS && s.patterns?.length === PATTERNS && s.chain?.length) {
-                for (const p of s.patterns) {
-                    p.fx ??= Array.from({ length: STEPS }, () => []); // saved before punch-in FX
-                    for (const t of p.tracks) t.lengths ??= Array<number>(STEPS).fill(1); // saved before note lengths
-                }
-                for (const t of s.tracks) {
-                    // saved before clock / length / MIDI per track
-                    t.rate ??= 1;
-                    t.length ??= STEPS;
-                    t.midi ??= null;
-                    t.harmony ??= 'free';
-                    t.voicing ??= 0;
-                    t.params ??= {}; // saved before sound parameters
-                    t.mute ??= false; // saved before the mixer
-                    t.solo ??= false;
-                }
-                s.root ??= 9; // A minor was fixed before
-                s.scale ??= 'minor';
-                return s;
-            }
-        }
-        const v1 = localStorage.getItem(KEY_V1);
-        if (v1) {
-            const s = JSON.parse(v1) as SongV1;
-            if (s.version === 1 && s.patterns?.length === PATTERNS) return migrateV1(s);
-        }
-    } catch {
-        // unreadable / blocked storage: start fresh
+/**
+ * A stored / imported song → a full v2 `Song` with defaults for fields added later (old saves and files keep working),
+ * or null if it isn't one. v1 songs are migrated. `version` newer than this app knows → throws (made with a newer μOp).
+ */
+export function parseSong(data: unknown): Song | null {
+    if (!data || typeof data !== 'object') return null;
+    const s = data as Song | SongV1;
+    if (typeof s.version === 'number' && s.version > 2) throw new Error(`Song version ${s.version}: made with a newer μOp`);
+    if (s.version === 1) return s.patterns?.length === PATTERNS ? migrateV1(s) : null;
+    if (s.version !== 2 || s.tracks?.length !== TRACKS || s.patterns?.length !== PATTERNS || !s.chain?.length) return null;
+    for (const p of s.patterns) {
+        p.fx ??= Array.from({ length: STEPS }, () => []); // saved before punch-in FX
+        for (const t of p.tracks) t.lengths ??= Array<number>(STEPS).fill(1); // saved before note lengths
     }
-    return newSong();
+    for (const t of s.tracks) {
+        // saved before clock / length / MIDI per track
+        t.rate ??= 1;
+        t.length ??= STEPS;
+        t.midi ??= null;
+        t.harmony ??= 'free';
+        t.voicing ??= 0;
+        t.params ??= {}; // saved before sound parameters
+        t.mute ??= false; // saved before the mixer
+        t.solo ??= false;
+    }
+    s.root ??= 9; // A minor was fixed before
+    s.scale ??= 'minor';
+    return s;
 }
 
-export function saveSong(song: Song): void {
-    try {
-        localStorage.setItem(KEY, JSON.stringify(song));
-    } catch {
-        // storage full / blocked: keep playing
+/** The song saved before projects existed (v2, or v1 migrated), null if none. Read once to create the first project. */
+export function legacySong(): Song | null {
+    for (const key of [KEY, KEY_V1]) {
+        try {
+            const raw = localStorage.getItem(key);
+            const song = raw ? parseSong(JSON.parse(raw)) : null;
+            if (song) return song;
+        } catch {
+            // unreadable / blocked storage
+        }
     }
+    return null;
 }

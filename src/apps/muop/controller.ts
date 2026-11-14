@@ -16,6 +16,8 @@ import {
     chordRoot,
     clonePattern,
     clonePatternTrack,
+    emptyPatternTrack,
+    emptyTrack,
     audible,
     MAX_LENGTH,
     findScale,
@@ -23,7 +25,6 @@ import {
     keyName,
     midiName,
     scaleLength,
-    saveSong,
     type FxHit,
     type Song,
     KINDS,
@@ -49,6 +50,18 @@ import { Inputs } from './inputs';
 import { requestMidi } from '../../engine/midi';
 import { harmonyTrack, nextChordWeights, trackMidis } from './harmony';
 import { AUTO_BARS, Generator, type GenSettings } from './variation';
+import { projects, type ProjectInfo } from './projects';
+
+/** The project the controller plays (projects.ts): saving goes there, open() switches (the page restarts the controller). */
+export interface ProjectLink {
+    id: string;
+    name: string;
+    save(song: Song): void;
+    /** Load another project; 'new' = create one, 'duplicate' = a copy of this one. */
+    open(id: string | 'new' | 'duplicate'): void;
+}
+
+const NO_PROJECT: ProjectLink = { id: '', name: '', save: () => {}, open: () => {} };
 
 export type { Cell, Help } from './page';
 
@@ -201,6 +214,8 @@ export class MuOpController {
         private m: MaschineMikroMk3,
         private song: Song,
         private sounds: Sounds,
+        /** Its project: saves go to the project it was loaded from. */
+        private project: ProjectLink = NO_PROJECT,
     ) {
         this.seq = new Sequencer(song, sounds);
         this.history = new History(song);
@@ -236,6 +251,7 @@ export class MuOpController {
             }
             this.seq.clock.at(s.time, () => {
                 if (s.step % 4 === 0) this.idlePosition(s.pattern, s.tick);
+                if (s.step % 4 === 0 && this.nextName && this.seq.swapPending) this.countdown(s.step);
                 this.step = s.step;
                 this.positions = s.positions;
                 this.tick = s.tick;
@@ -246,7 +262,7 @@ export class MuOpController {
                 this.update();
             });
         });
-        this.say('μOp\nSELECT + pad: track');
+        this.say(this.project.name ? `μOp  ${this.project.name}\nSELECT + pad: track` : 'μOp\nSELECT + pad: track');
         // instruments load in the background (Tone.js is fetched on first use); the pads play as soon as they're ready
         this.song.tracks.forEach((t, i) => {
             if (!t.kind) return;
@@ -267,7 +283,8 @@ export class MuOpController {
             for (const voices of this.liveVoices.values()) for (const v of voices) v.release();
             for (const t of this.flashTimers.values()) clearTimeout(t);
             clearTimeout(this.saveTimer);
-            saveSong(this.song);
+            this.stopped = true;
+            this.project.save(this.song);
             this.inputs.dispose();
             this.sounds.dispose();
         }
@@ -441,6 +458,134 @@ export class MuOpController {
         this.update();
     }
 
+    /**
+     * Duplicates a track into the next empty one (app page): settings, sound, steps in every pattern. A MIDI track gets
+     * the next channel not used on its port, so a few clicks make one track per channel. Returns the new index (-1 = all full).
+     */
+    duplicateTrack(track: number): number {
+        const src = this.song.tracks[track];
+        const to = this.song.tracks.findIndex((t) => !t.kind);
+        if (!src?.kind || to < 0) {
+            if (to < 0) this.say('Duplicate\nall 16 tracks in use');
+            return -1;
+        }
+        const t: Track = { ...src, params: { ...src.params }, midi: src.midi && { ...src.midi }, mute: false, solo: false };
+        t.name = this.copyName(src.name);
+        if (t.midi) {
+            const taken = new Set(this.song.tracks.filter((x) => x.kind && x.midi?.port === t.midi!.port).map((x) => x.midi!.channel));
+            for (let k = 1; k <= 16; k++) {
+                const ch = ((t.midi.channel - 1 + k) % 16) + 1;
+                if (!taken.has(ch)) {
+                    t.midi.channel = ch;
+                    break;
+                }
+            }
+        }
+        this.song.tracks[to] = t;
+        for (const p of this.song.patterns) p.tracks[to] = clonePatternTrack(p.tracks[track]);
+        const edited = this.edited.get(track);
+        if (edited) this.edited.set(to, { sound: edited.sound, params: { ...edited.params } });
+        this.pens[to] = this.pens[track];
+        this.sounds.setLevel(to, t.level);
+        this.sounds.setMidi(to, t.midi);
+        void this.setSound(to, t.sound, false, t.params);
+        this.history.reset(); // its snapshots don't know the new track
+        this.track = to;
+        this.heldStep = null;
+        this.say(`${this.label(to)}\n${t.midi ? `MIDI ch ${t.midi.channel}` : `copy of T${track + 1}`}`);
+        this.saveSoon();
+        this.update();
+        return to;
+    }
+
+    /** Removes a track (app page): its steps in every pattern and its recorded FX go, the slot is empty again. */
+    removeTrack(track: number): void {
+        const t = this.song.tracks[track];
+        if (!t?.kind) return;
+        const label = this.label(track);
+        this.sounds.setMidi(track, null); // notes off
+        this.sounds.clear(track);
+        this.song.tracks[track] = emptyTrack(track);
+        for (const p of this.song.patterns) {
+            p.tracks[track] = emptyPatternTrack();
+            for (const hits of p.fx) {
+                const keep = hits.filter((h) => h.track !== track);
+                hits.splice(0, hits.length, ...keep);
+            }
+        }
+        for (const [pad, hit] of this.fxPads) if (hit.track === track) this.fxPads.delete(pad);
+        this.seq.tracksMoved();
+        this.generators.delete(track);
+        this.edited.delete(track);
+        this.beforeRandom.delete(track);
+        for (const [pad, rec] of this.recPads) if (rec.track === track) this.recPads.delete(pad);
+        this.pens[track] = 0;
+        this.history.reset();
+        if (this.track === track) {
+            const used = this.song.tracks.flatMap((x, i) => (x.kind ? [i] : []));
+            this.track = used.filter((i) => i < track).pop() ?? used[0] ?? 0;
+            this.heldStep = null;
+        }
+        this.say(`Removed\n${label}`);
+        this.saveSoon();
+        this.update();
+    }
+
+    /** "Bass" → "Bass 2", "Bass 2" → "Bass 3", skipping names in use. */
+    private copyName(name: string): string {
+        const m = /^(.*?)\s*(\d+)$/.exec(name);
+        const base = m ? m[1] : name;
+        const names = new Set(this.song.tracks.filter((t) => t.kind).map((t) => t.name));
+        for (let n = m ? Number(m[2]) + 1 : 2; ; n++) if (!names.has(`${base} ${n}`)) return `${base} ${n}`;
+    }
+
+    /** Swaps two tracks (app page ↑ / ↓: with the next track in use, empty ones in between stay). */
+    swapTracks(a: number, b: number): void {
+        const order = [...this.song.tracks.keys()];
+        if (a === b || !(a in order) || !(b in order)) return;
+        [order[a], order[b]] = [order[b], order[a]];
+        this.reorderTracks(order);
+    }
+
+    /**
+     * New track order, order[j] = the old index of the track that lands at j. Its steps in every pattern, recorded FX,
+     * sound and settings move along. Undo history starts over (its snapshots know the old order).
+     */
+    private reorderTracks(order: number[]): void {
+        const where = new Map(order.map((old, j) => [old, j])); // old index → new index
+        const permute = <T>(list: T[]) => order.map((old) => list[old]);
+        const remapKeys = <V>(map: Map<number, V>) => {
+            const entries = [...map].map(([k, v]) => [where.get(k) ?? k, v] as const);
+            map.clear();
+            for (const [k, v] of entries) map.set(k, v);
+        };
+        const remapHit = (hit: FxHit) => {
+            if (hit.track !== undefined) hit.track = where.get(hit.track) ?? hit.track;
+        };
+
+        this.song.tracks = permute(this.song.tracks);
+        for (const p of this.song.patterns) {
+            p.tracks = permute(p.tracks);
+            for (const hits of p.fx) hits.forEach(remapHit);
+        }
+        for (const hit of this.fxPads.values()) remapHit(hit);
+        this.stepFx.forEach(remapHit);
+        this.sounds.moveSlots(order);
+        this.seq.tracksMoved();
+        remapKeys(this.generators);
+        remapKeys(this.edited);
+        remapKeys(this.beforeRandom);
+        for (const rec of this.recPads.values()) rec.track = where.get(rec.track) ?? rec.track;
+        this.pens = permute(this.pens);
+        this.positions = permute(this.positions);
+        this.track = where.get(this.track) ?? this.track;
+        this.heldStep = null;
+        this.history.reset();
+        this.say(`${this.label(this.track)}\nmoved here`);
+        this.saveSoon();
+        this.update();
+    }
+
     /** Song key (CHORDS page, SHIFT + Semitone, app page). Steps keep their scale degrees: the song moves along. */
     setKey(patch: { root?: number; scale?: string }): void {
         if (patch.root !== undefined) this.song.root = ((Math.round(patch.root) % 12) + 12) % 12;
@@ -566,12 +711,14 @@ export class MuOpController {
             hint: 'pad = copy pattern to',
             cells: () => c.patternCells(),
             padDown: (pad) => {
+                const from = c.seq.pattern;
                 c.history.edit(pad);
-                c.song.patterns[pad] = clonePattern(c.song.patterns[c.seq.pattern]);
+                c.song.patterns[pad] = clonePattern(c.song.patterns[from]);
                 c.saveSoon();
-                c.say(`Copy ${c.seq.pattern + 1} > ${pad + 1}`);
+                c.seq.setChain([pad]); // go on with the copy: at the next bar while playing, right away when stopped
+                c.say(`Copy ${from + 1} > ${pad + 1}${c.seq.playing ? ' (next)' : ''}`);
             },
-            help: [{ keys: 'DUPLICATE + pad', text: 'Copy the current pattern there' }],
+            help: [{ keys: 'DUPLICATE + pad', text: 'Copy the current pattern there and switch to the copy (while playing: at the end of the bar)' }],
         };
 
         const erase: Page = {
@@ -909,7 +1056,32 @@ export class MuOpController {
             ],
         };
 
-        return [select, pattern, duplicate, erase, perform, tempo, swing, volume, search, plugin, chords, variation, shift];
+        const project: Page = {
+            button: 'project',
+            name: 'Project',
+            params: [
+                {
+                    name: 'Create',
+                    help: 'Create: new project / duplicate this one',
+                    value: () => (c.createChoice ? 'Duplicate' : 'New'),
+                    bar: () => choiceBar(c.createChoice, 2),
+                    step: (d) => (c.createChoice = clamp(c.createChoice + Math.sign(d), 0, 1)),
+                },
+                {
+                    name: 'Load',
+                    help: 'Load: the projects, starting at the loaded one (*)',
+                    value: () => c.projectChoiceName(),
+                    bar: () => choiceBar(c.projectChoice, c.projectList.length),
+                    step: (d) => (c.projectChoice = clamp(c.projectChoice + Math.sign(d), 0, c.projectList.length - 1)),
+                },
+            ],
+            open: () => c.openProjectPage(),
+            apply: {
+                name: 'Do it: create / load (while playing: switches at the next bar, seamlessly). Release without push = no change',
+                run: () => c.applyProjectPage(c.pages.currentParam(project)),
+            },
+        };
+        return [select, pattern, duplicate, erase, perform, tempo, swing, volume, search, plugin, chords, variation, shift, project];
     }
 
     // --- input ---
@@ -1523,9 +1695,106 @@ export class MuOpController {
         }).catch(ignore);
     }
 
+    /** Stores the song right away (before export / duplicate: saveSoon() waits 500 ms after the last edit). */
+    saveNow(): void {
+        clearTimeout(this.saveTimer);
+        this.project.save(this.song);
+    }
+
+    // PROJECT page: `< >` Create (new / duplicate) | Load (the list, taken when the page opens). Turning only
+    // chooses, push does it.
+    private projectList: ProjectInfo[] = [];
+    private projectChoice = 0;
+    /** 0 = new, 1 = duplicate. */
+    private createChoice = 0;
+
+    private openProjectPage(): number {
+        this.projectList = projects().list;
+        this.projectChoice = Math.max(0, this.projectList.findIndex((p) => p.id === this.project.id));
+        this.createChoice = 0;
+        return 0; // starts on Create
+    }
+
+    private projectChoiceName(): string {
+        const p = this.projectList[this.projectChoice];
+        return p ? `${p.name}${p.id === this.project.id ? ' *' : ''}` : '–';
+    }
+
+    private applyProjectPage(param: number): void {
+        if (param === 0) return this.project.open(this.createChoice ? 'duplicate' : 'new');
+        const p = this.projectList[this.projectChoice];
+        if (!p) return;
+        if (p.id === this.project.id && !this.seq.swapPending) return this.say(`Project\n${p.name} is loaded`);
+        this.project.open(p.id);
+    }
+
+    private switchToken = 0;
+    private stopped = false;
+    /** A song switch waits for the bar line (playing): its project name, for the countdown. */
+    private nextName: string | null = null;
+    /** Beats left when the countdown started (the first number shown). */
+    private countFrom = 0;
+
+    /** "Next  Song 2 / 4..3..2.." : the beats left until the switch at the next pattern start. */
+    private countdown(step: number): void {
+        const left = Math.ceil((STEPS - step) / 4);
+        this.countFrom ||= left;
+        const nums: number[] = [];
+        for (let k = this.countFrom; k >= left; k--) nums.push(k);
+        this.say(`Next  ${this.nextName}\n${nums.join('..')}..`);
+    }
+
+    /**
+     * Plays another project's song. Its instruments load first (the current song keeps playing with its sounds), then
+     * the song switches: while playing seamlessly at the next pattern start, stopped right away. No restart.
+     */
+    async switchProject(link: ProjectLink, song: Song): Promise<void> {
+        this.saveNow(); // the old song, into its own project
+        const token = ++this.switchToken;
+        this.say(`${this.seq.playing ? 'Next' : 'Loading'}\n${link.name}`);
+        await Promise.all(
+            song.tracks.map((t, i) => (t.kind ? this.sounds.preload(i, t.kind, t.sound, t.params).catch((e) => console.error(e)) : undefined)),
+        );
+        if (token !== this.switchToken || this.stopped) return; // another switch came later
+        this.seq.swapSong(() => this.applySong(link, song));
+        if (this.seq.swapPending) {
+            // playing: count the beats down to the bar line (the step handler goes on with it)
+            this.nextName = link.name;
+            this.countFrom = 0;
+            this.countdown(this.step);
+        }
+    }
+
+    /** At the switch: the new song's content into the same Song object (sequencer / history keep their reference). */
+    private applySong(link: ProjectLink, song: Song): void {
+        clearTimeout(this.saveTimer);
+        this.nextName = null;
+        this.countFrom = 0;
+        this.project = link;
+        Object.assign(this.song, song);
+        this.history.reset();
+        this.generators.clear();
+        this.edited.clear();
+        this.beforeRandom.clear();
+        this.tapChain = [];
+        this.heldStep = null;
+        this.recPads.clear();
+        this.pens = this.song.tracks.map(() => 0);
+        this.song.tracks.forEach((t, i) => {
+            this.sounds.setLevel(i, t.level);
+            this.sounds.setMidi(i, t.midi);
+            if (!t.kind) this.sounds.clear(i);
+            else if (!this.sounds.install(i)) void this.setSound(i, t.sound, false, t.params); // preload superseded / failed
+        });
+        this.sounds.volume = this.song.volume;
+        if (this.song.tracks.some((t) => t.midi)) void requestMidi();
+        this.say(`μOp  ${link.name}`);
+        this.update();
+    }
+
     private saveSoon(): void {
         clearTimeout(this.saveTimer);
-        this.saveTimer = setTimeout(() => saveSong(this.song), 500);
+        this.saveTimer = setTimeout(() => this.project.save(this.song), 500);
     }
 
     /** Clock steps after which every track in use is back at its step 1 on a bar line (LCM of the loop lengths). */

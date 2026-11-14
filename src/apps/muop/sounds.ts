@@ -37,6 +37,8 @@ interface Slot {
     loading: number;
     /** MIDI out instead of the instrument. */
     midi: TrackMidi | null;
+    /** Preloaded for a song switch, not playing yet (install()). */
+    next: { instrument: DrumKit | Melodic; kind: TrackKind; id: string; params: Params } | null;
 }
 
 export class Sounds {
@@ -100,6 +102,53 @@ export class Sounds {
         return def.name;
     }
 
+    /**
+     * Loads an instrument for a coming song switch without playing it: the track keeps its current sound until
+     * install(). A later set() / preload() on the track supersedes it.
+     */
+    async preload(track: number, kind: TrackKind, id: string, params: Params): Promise<void> {
+        const slot = this.slot(track);
+        const def = findInstrument(soundsFor(kind), id);
+        const token = ++slot.loading;
+        slot.next?.instrument.dispose();
+        slot.next = null;
+        const instrument = await def.create(this.ctx, slot.drive.input, { ...params });
+        if (this.disposed || token !== slot.loading) return instrument.dispose();
+        slot.next = { instrument, kind, id: def.id, params };
+    }
+
+    /** Switches the track to its preloaded instrument (at the song switch). False if none is ready. */
+    install(track: number): boolean {
+        const slot = this.slots.get(track);
+        const next = slot?.next;
+        if (!slot || !next) return false;
+        clearTimeout(slot.rebuild);
+        const old = slot.drums ?? slot.melodic;
+        slot.drums = next.kind === 'drums' ? (next.instrument as DrumKit) : null;
+        slot.melodic = next.kind === 'drums' ? null : (next.instrument as Melodic);
+        slot.id = next.id;
+        slot.kind = next.kind;
+        slot.next = null;
+        this.setDrive(slot, next.params);
+        if (old) setTimeout(() => old.dispose(), 2000); // let its tails ring out
+        return true;
+    }
+
+    /** The track goes silent (empty in the new song). */
+    clear(track: number): void {
+        const slot = this.slots.get(track);
+        if (!slot) return;
+        clearTimeout(slot.rebuild);
+        slot.loading++;
+        const old = slot.drums ?? slot.melodic;
+        slot.drums = slot.melodic = null;
+        slot.next?.instrument.dispose();
+        slot.next = null;
+        slot.id = '';
+        slot.kind = null;
+        if (old) setTimeout(() => old.dispose(), 2000);
+    }
+
     /** New parameter values for the track's instrument: live if it can, else rebuilt shortly after the last change. */
     tweak(track: number, params: Params): void {
         const slot = this.slots.get(track);
@@ -114,7 +163,8 @@ export class Sounds {
         const { kind, id } = slot;
         slot.rebuild = setTimeout(() => {
             slot.rebuild = undefined;
-            void this.set(track, kind!, id, params);
+            const at = this.indexOf(slot); // the track may have moved meanwhile
+            if (at >= 0) void this.set(at, kind!, id, params);
         }, 120);
     }
 
@@ -220,9 +270,27 @@ export class Sounds {
         for (const slot of this.slots.values()) if (slot.midi) midiAllOff(slot.midi.port, slot.midi.channel);
         this.master.gain.setTargetAtTime(0, this.ctx.currentTime, 0.02);
         setTimeout(() => {
-            for (const slot of this.slots.values()) (slot.drums ?? slot.melodic)?.dispose();
+            for (const slot of this.slots.values()) {
+                (slot.drums ?? slot.melodic)?.dispose();
+                slot.next?.instrument.dispose();
+            }
             this.master.disconnect();
         }, 300);
+    }
+
+    /** Tracks reordered: new track j plays what was track order[j] (instrument, volume, meter, MIDI out move along). */
+    moveSlots(order: readonly number[]): void {
+        const old = this.slots;
+        this.slots = new Map();
+        order.forEach((from, to) => {
+            const slot = old.get(from);
+            if (slot) this.slots.set(to, slot);
+        });
+    }
+
+    private indexOf(slot: Slot): number {
+        for (const [i, s] of this.slots) if (s === slot) return i;
+        return -1;
     }
 
     private slot(track: number): Slot {
@@ -233,7 +301,7 @@ export class Sounds {
             const drive = driveStage(this.ctx, gain);
             const analyser = new AnalyserNode(this.ctx, { fftSize: 1024 });
             gain.connect(analyser);
-            slot = { drums: null, melodic: null, id: '', kind: null, rebuild: undefined, gain, drive, analyser, peakHold: 0, loading: 0, midi: null };
+            slot = { drums: null, melodic: null, id: '', kind: null, rebuild: undefined, gain, drive, analyser, peakHold: 0, loading: 0, midi: null, next: null };
             this.slots.set(track, slot);
         }
         return slot;

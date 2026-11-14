@@ -21,6 +21,13 @@ export class History {
 
     constructor(private song: Song) {}
 
+    /** Forget everything (another song was loaded into the same Song object). */
+    reset(): void {
+        this.undos = [];
+        this.redos = [];
+        this.open = false;
+    }
+
     get canUndo(): boolean {
         return this.undos.length > 0;
     }

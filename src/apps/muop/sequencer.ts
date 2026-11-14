@@ -49,6 +49,8 @@ export class Sequencer {
     chainPos = 0;
     /** Chain to switch to at the next pattern start (set while playing). */
     pendingChain: number[] | null = null;
+    /** Song switch waiting for the next pattern start (swapSong while playing). */
+    private pendingSwap: (() => void) | null = null;
     /** Step to start / resume from. */
     private nextStep = 0;
     /** Song position in clock steps (16ths) since the start: tracks derive their own step from it (rate, length). */
@@ -103,12 +105,46 @@ export class Sequencer {
     pause(): void {
         this.clock.stop();
         this.releaseFx();
+        if (this.applySwap()) this.nextStep = 0;
+    }
+
+    /**
+     * Another song: `apply` replaces the song's content in place (the caller copies it into the same Song object and
+     * switches the instruments). Playing: at the next pattern start, seamlessly (the clock runs on, the new song starts at
+     * its first pattern, position 0). Stopped: right away. A later call replaces a waiting one.
+     */
+    swapSong(apply: () => void): void {
+        this.pendingSwap = apply;
+        if (!this.playing) {
+            this.applySwap();
+            this.nextStep = 0;
+        }
+    }
+
+    get swapPending(): boolean {
+        return !!this.pendingSwap;
+    }
+
+    private applySwap(): boolean {
+        const apply = this.pendingSwap;
+        if (!apply) return false;
+        this.pendingSwap = null;
+        apply();
+        this.pendingChain = null;
+        this.chainPos = 0;
+        this.tick = 0;
+        this.trackFx.clear();
+        this.skip.clear();
+        this.recent = [];
+        this.clock.swing = this.song.swing; // bpm: applyFx() sets it from the song on every step
+        return true;
     }
 
     /** Stops and rewinds to the first step of the chain. */
     stop(): void {
         this.clock.stop();
         this.releaseFx();
+        this.applySwap();
         this.nextStep = 0;
         this.tick = 0;
         this.chainPos = 0;
@@ -177,7 +213,7 @@ export class Sequencer {
 
     private play(index: number, time: number, duration: number): void {
         const step = index % STEPS;
-        if (step === 0 && index !== this.clock.startIndex) this.advanceChain();
+        if (step === 0 && index !== this.clock.startIndex && !this.applySwap()) this.advanceChain();
         this.nextStep = (step + 1) % STEPS;
         const tick = this.tick++;
         const pattern = this.pattern;
@@ -264,6 +300,12 @@ export class Sequencer {
         bus.step(t, duration, tick);
         // slow down: the tempo sinks step by step, back to the song tempo on release
         this.clock.bpm = bus.isActive('slow') ? Math.max(this.song.bpm * 0.25, this.clock.bpm * 0.8) : this.song.bpm;
+    }
+
+    /** Tracks reordered: forget the per-track playback state (track FX, skipped recorded steps). */
+    tracksMoved(): void {
+        this.trackFx.clear();
+        this.skip.clear();
     }
 
     /** Ends all FX now (stop / pause). Recorded FX stay in the pattern. */

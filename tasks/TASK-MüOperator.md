@@ -44,6 +44,7 @@ Rules:
 | MUTE / SOLO (open) | tracks (drums track: drum sounds) | – | – | – |
 | TEMPO / SWING / VOLUME | – | value (VOLUME: `< >` track / master) | – | – |
 | SEARCH | playable | sound browser | – | short press = next sound |
+| PROJECT | playable | Create (new / duplicate), Load (the list, at the loaded one *) | – | push = do it; playing: switches at the next bar, seamlessly, display counts the beats down (release without push = no change) |
 | SHIFT (modifier) | the printed pad functions | – | density (live) | – |
 
 ### Harmony concept
@@ -52,7 +53,15 @@ Rules:
   so changing the key transposes the song without breaking it.
 - **The first chords track is the harmony source.** Its chord holds until the next one; with a clock divider a
   16-step progression spans 4 or 16 bars under a one-bar riff.
+  Its position doesn't matter: new songs are Drums, Bass, Lead, Chords; the app's track list reorders tracks (▲ ▼, steps
+  in all patterns, recorded FX and sounds move along, the undo history starts over).
+  Below the list: "+ track", "duplicate" (the selected track into the next empty one; a MIDI track gets the next free
+  channel on its port: 4 clicks = 4 MIDI tracks). × on a row removes a track (click twice; its steps in all patterns go).
 - Notes tracks have a **harmony mode**: free / transpose (+ chord root) / follow (chord tones). Drums are not affected.
+
+### Limitations
+
+- 16 step pattern - easy use without page/bar switching.
 
 ---
 
@@ -60,10 +69,12 @@ Rules:
 
 ### 1. Web app page
 - [ ] Pattern overview: all tracks × 16 steps of the current pattern, clickable, with the playhead.
+- [ ] For people without a machine... make a device view ? would need multi touch or latching... behaviour change :-(
 - [ ] Sound visualizer (scope / spectrum of the master, from the meter analysers).
 - [ ] Chain view (the 16 patterns + the chain, click to queue / edit).
 - [ ] WAV recording of the master (MediaRecorder): keep a jam.
-- [ ] Song sharing: file download / load (JSON: backup, move songs between computers) and share as URL.
+- [/] Song sharing: file download / load (JSON: backup, move songs between computers) and share as URL.
+  Base done: projects + export / import as `muop1:` text, see [TASK-ProjectSharing.md](TASK-ProjectSharing.md). Open: link, sparse, file.
   - Measured: the full `Song` JSON is ~110–120 KB even when nearly empty (every slot stored: 16 × 16 pattern tracks
     with 8 × 16 drum velocities each), plain base64 ~150–160 K chars. gzip + base64: new song ~1.4 K chars, all 16
     patterns × 16 tracks filled with random steps ~16 K (brotli ~0.6 K / ~14.5 K).
@@ -80,7 +91,7 @@ Rules:
     files / links keep working.
   - On load from URL: ask before replacing the current song (undo / keep a backup of the old one).
 - [ ] Computer keyboard shortcuts (space = play, …).
-- [ ] MIDI routing presets per synth (port, channel, which tracks), app only.
+- [ ] MIDI routing presets per synth (port, channel, which tracks), app only. Choice of project midi settings or own.
 - [ ] Mixer: MIDI ↔ internal switch in the strip; MIDI tracks: fader sends CC 7 (volume) to the synth.
 - [ ] Favorites list (rename).
 - [ ] Audio inputs: latency compensation (send MIDI earlier by the input latency, set by ear or measured), channel
@@ -89,6 +100,7 @@ Rules:
 ### 2. MUTE / SOLO on the device
 - [ ] MUTE / SOLO + pad: per track (pads show the tracks like SELECT), per drum sound on a drums track.
   (Mute / solo per track exist in the song and the app mixer already.)
+  - maybe missuse solo as the drum per voice mute (needs quick access)
 
 ### 3. Workflow: drops
 - [ ] Any way to generate a drop now and then? Ideas:
@@ -96,6 +108,7 @@ Rules:
     silence on the last beats), then the full pattern hits on the 1.
   - Drop = a PERFORM FX recorded into a pattern (sweep / gate / tape stop on the last bar) and chained before the main one.
   - Auto density curve: with Auto on, density walks down over n bars and snaps back (build-up / breakdown).
+  - IDEA: how about a perform FX, that mutes parts of drums until the next bar or 2... maybe add randomness to what gets muted... could mute base line to... leave the lead running... sparce chords...
 
 ### 4. Sounds
 Moved to [TASK-SOUNDS.md](TASK-SOUNDS.md) (engines, sound tuning, plugins).

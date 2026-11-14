@@ -31,7 +31,8 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
   - `lab/` light show + hardware test modes (`modes/`: `index.ts` registry, `types.ts` contract, `lightshow.ts`, `tests.ts`)
   - `starter/` template for a new app (copy it)
   - `muop/` μOp, PO-style groovebox, 16 tracks (kinds drums / notes / chords), SELECT + pad selects (`model.ts` song data,
-    chords, v1 → v2 migration, localStorage, `sounds.ts` mixer: instrument per track + strip filter + FX bus + volume,
+    chords, `parseSong()` = checks / defaults / v1 → v2 migration for stored and imported songs, `projects.ts` projects in localStorage
+    (list, active, new / duplicate / rename / delete, export / import as `muop1:<gzip base64url>` text), `projectbar.tsx` its UI, `sounds.ts` mixer: instrument per track + strip filter + FX bus + volume,
     `sequencer.ts` chain playback + quantized recording + punch-in FX, `fx.ts` PERFORM FX table + track step remapping, `history.ts` undo history (pattern snapshots, gestures), `harmony.ts` key / chords track as harmony source (free / transpose / follow, chord suggestions), `variation.ts` VARIATION generator (Marbles-style déjà vu loops), `favorites.ts` STAR favorites + sound browser list, `page.ts` hold-a-button pages (`Pages`: routing of pads / `< >` / encoder / strip,
     button lights, display, generated cheat sheet), `controller.ts` input mapping / lights / display + the page definitions, `index.tsx` page, `panel.tsx` its right panel: mixer / sound editor / inputs / FX / help, `inputs.ts` audio inputs of this computer).
     Display messages go to the dev log (`event` with `app: 'muop'`).
@@ -92,6 +93,9 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
    handles and loops running). After the reload the app auto-connects via `navigator.hid.getDevices()` and starts the show.
    - Auto-connect only works once permission was granted via the "Connect to Device" button (user gesture, the user has to click it).
    - The tab must stay visible: background tabs throttle timers to ~1 Hz, so animations crawl.
+   - **New file with Tailwind classes:** the running dev server doesn't add new files to Tailwind's scan, so their
+     classes are missing (e.g. white text on no background = invisible button). `touch src/shell/index.css` makes it
+     rescan (the page reloads). Check: `curl -s localhost:9000/src/shell/index.css | grep -c '\.bg-red-600'`.
 3. Type-check: `npx tsc` (`npm run build` = tsc + vite build).
 4. Look at the device with the camera (below). Don't claim a visual change works without a shot.
 
@@ -155,3 +159,10 @@ ffmpeg -i seq%02d.jpg -vf "tile=4x2" -frames:v 1 contact.jpg
 - Lights report 0x80 is **80 bytes** (descriptor). Button report: see `src/maschine/buttons.ts` (byte 6 encoder, 9 strip).
 - Display shows the current scene name (`maschine.screen.set`), auto-blanks after 3 s.
 - Display is an aged OLED (ssd1303 or so) it shall blank after some seconds to save it...
+
+## Known limits (not solved)
+
+- One browser tab per device: two tabs would both write to it.
+- Background tabs throttle timers (animations crawl); the clock runs in a worker, so playback keeps time.
+- Pads could get 4 levels like the buttons (raw `[1, 0, 2, 3]`, raw level 0 = dim), unverified.
+- Unplug: the shell calls `m.close()` and starts the task again on a new driver after the replug; writes time out after 1 s.

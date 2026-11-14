@@ -4,8 +4,10 @@ import type { Color } from '../../maschine';
 import { audioContext, audioRunning } from '../../engine/audio';
 import { useDeviceTask } from '../../shell/device';
 import type { AppDef, AppProps } from '../../shell/types';
-import { MuOpController, trackColor, type Cell, type MuOpView, type TrackView } from './controller';
-import { HARMONY_MODES, KINDS, NOTE_NAMES, RATES, SCALES, STEPS, VOICINGS, kindName, loadSong, rateName, type HarmonyMode, type TrackKind } from './model';
+import { MuOpController, trackColor, type Cell, type MuOpView, type ProjectLink, type TrackView } from './controller';
+import { HARMONY_MODES, KINDS, NOTE_NAMES, RATES, SCALES, STEPS, VOICINGS, kindName, rateName, type HarmonyMode, type TrackKind } from './model';
+import { ProjectBar } from './projectbar';
+import { activeProject, createProject, duplicateProject, loadProject, projects, saveProject, setActiveProject } from './projects';
 import { midiOutputs, onMidiChange, requestMidi, type MidiPortInfo } from '../../engine/midi';
 import { DRUM_SOUNDS, Sounds, soundsFor } from './sounds';
 import { favoriteOf, indexIn, soundList } from './favorites';
@@ -38,15 +40,43 @@ function MuOp({ maschine }: AppProps) {
     const [ctl, setCtl] = useState<MuOpController | null>(null);
     const [, rerender] = useReducer((x: number) => x + 1, 0);
     const audio = useAudioRunning();
+    /**
+     * Active project. Switching doesn't restart the device task: the running controller loads the other song in place
+     * (seamlessly at the next bar while playing). Without a device it just becomes the active one.
+     */
+    const [project, setProject] = useState(() => activeProject().id);
+    const ctlRef = useRef<MuOpController | null>(null);
+
+    /** What a controller needs of its project: saving there, switching to another one. */
+    const link = (id: string): ProjectLink => ({
+        id,
+        name: projects().list.find((p) => p.id === id)?.name ?? '',
+        save: (song) => saveProject(id, song),
+        open: (next) => {
+            if (next === 'new') switchTo(createProject().id);
+            else if (next === 'duplicate') {
+                ctlRef.current?.saveNow();
+                switchTo(duplicateProject(id).id);
+            } else switchTo(next);
+        },
+    });
+    const switchTo = (id: string) => {
+        setActiveProject(id);
+        setProject(id);
+        void ctlRef.current?.switchProject(link(id), loadProject(id));
+    };
 
     useDeviceTask(
         maschine,
         async (m, signal) => {
-            const c = new MuOpController(m, loadSong(), new Sounds(audioContext()));
+            const id = activeProject().id;
+            const c = new MuOpController(m, loadProject(id), new Sounds(audioContext()), link(id));
+            ctlRef.current = c;
             setCtl(c);
             try {
                 await c.run(signal);
             } finally {
+                if (ctlRef.current === c) ctlRef.current = null;
                 setCtl(null);
             }
         },
@@ -76,6 +106,8 @@ function MuOp({ maschine }: AppProps) {
             )}
 
             {v && ctl && <StatusBar v={v} ctl={ctl} />}
+
+            <ProjectBar project={project} onSwitch={switchTo} beforeRead={() => ctl?.saveNow()} />
 
             <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
                 {v && ctl ? (
@@ -241,8 +273,14 @@ function TrackList({ v, ctl }: { v: MuOpView; ctl: MuOpController }) {
     const ports = useMidiPorts();
     /** The next empty track (the "+" row enables it), -1 = all 16 in use. */
     const next = v.tracks.findIndex((t) => !t.kind);
+    /** Tracks in use: ↑ / ↓ swap with the neighbour in use (empty tracks in between stay hidden). */
+    const used = v.tracks.flatMap((t, i) => (t.kind ? [i] : []));
+    /** The selected track: "duplicate" copies it. */
+    const src = v.tracks[v.track];
     return (
-        <section className="overflow-x-auto rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+        <section className="rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+            {/* only the table scrolls sideways; the "+ track" button below stays in view */}
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
                 <thead className="text-left text-xs text-zinc-500 dark:text-zinc-400">
                     <tr className="border-b border-zinc-200 dark:border-zinc-800">
@@ -258,30 +296,87 @@ function TrackList({ v, ctl }: { v: MuOpView; ctl: MuOpController }) {
                         </th>
                         <th className={`${TH} text-right`}>Volume</th>
                         <th className={`${TH} pr-4`}>MIDI out</th>
+                        <th />
                     </tr>
                 </thead>
                 <tbody>
-                    {v.tracks.map((t, i) => (t.kind ? <TrackRow key={i} i={i} t={t} selected={i === v.track} ctl={ctl} ports={ports} /> : null))}
-                    {next >= 0 && (
-                        <tr>
-                            <td colSpan={10} className="px-4 py-1">
-                                <button
-                                    onClick={() => ctl.selectTrack(next)}
-                                    title={`Add track ${next + 1}: a notes track with a random sound (like SELECT + an empty pad)`}
-                                    className="rounded-md px-2 py-0.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                                >
-                                    + track
-                                </button>
-                            </td>
-                        </tr>
+                    {v.tracks.map((t, i) =>
+                        t.kind ? (
+                            <TrackRow
+                                key={i}
+                                i={i}
+                                t={t}
+                                selected={i === v.track}
+                                ctl={ctl}
+                                ports={ports}
+                                up={used.filter((j) => j < i).pop()}
+                                down={used.find((j) => j > i)}
+                            />
+                        ) : null,
                     )}
                 </tbody>
             </table>
+            </div>
+            {next >= 0 && (
+                <div className="flex flex-wrap gap-1 border-t border-zinc-100 px-4 py-1 text-sm dark:border-zinc-800">
+                    <button
+                        onClick={() => ctl.selectTrack(next)}
+                        title={`Add track ${next + 1}: a notes track with a random sound (like SELECT + an empty pad)`}
+                        className={FOOT_BTN}
+                    >
+                        + track
+                    </button>
+                    {src?.kind && (
+                        <button
+                            onClick={() => ctl.duplicateTrack(v.track)}
+                            title={`Copy T${v.track + 1} ${src.name} (sound, settings, steps) to track ${next + 1}${
+                                src.midi ? ', on the next free MIDI channel' : ''
+                            }`}
+                            className={FOOT_BTN}
+                        >
+                            ⧉ duplicate T{v.track + 1} {src.name}
+                            {src.midi && <span className="text-zinc-400"> → ch {nextChannel(v.tracks, src.midi)}</span>}
+                        </button>
+                    )}
+                </div>
+            )}
         </section>
     );
 }
 
-function TrackRow({ i, t, selected, ctl, ports }: { i: number; t: TrackView; selected: boolean; ctl: MuOpController; ports: MidiPortInfo[] }) {
+const FOOT_BTN =
+    'rounded-md px-2 py-0.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100';
+
+/** The channel a duplicate gets: the next one not used on the port (as MuOpController.duplicateTrack). */
+function nextChannel(tracks: TrackView[], midi: { port: string; channel: number }): number {
+    const taken = new Set(tracks.filter((t) => t.kind && t.midi?.port === midi.port).map((t) => t.midi!.channel));
+    for (let k = 1; k <= 16; k++) {
+        const ch = ((midi.channel - 1 + k) % 16) + 1;
+        if (!taken.has(ch)) return ch;
+    }
+    return midi.channel;
+}
+
+const MOVE_BTN = 'rounded px-0.5 leading-none text-zinc-400 hover:bg-zinc-200 hover:text-zinc-800 disabled:invisible dark:hover:bg-zinc-700 dark:hover:text-zinc-100';
+
+function TrackRow({
+    i,
+    t,
+    selected,
+    ctl,
+    ports,
+    up,
+    down,
+}: {
+    i: number;
+    t: TrackView;
+    selected: boolean;
+    ctl: MuOpController;
+    ports: MidiPortInfo[];
+    /** The track in use above / below (undefined = none): ↑ / ↓ swap with it. */
+    up?: number;
+    down?: number;
+}) {
     const stop = (e: React.SyntheticEvent) => e.stopPropagation();
     const empty = !t.kind;
     const portMissing = t.midi && !ports.some((p) => p.id === t.midi!.port);
@@ -294,7 +389,15 @@ function TrackRow({ i, t, selected, ctl, ports }: { i: number; t: TrackView; sel
         >
             <td className="px-4 py-1 whitespace-nowrap text-zinc-500 dark:text-zinc-400">
                 <span className="mr-2 inline-block size-2 rounded-full" style={{ backgroundColor: CSS[trackColor(t)] }} />
-                {i + 1}
+                <span className="inline-block w-4">{i + 1}</span>
+                <span className="ml-1 inline-flex flex-col align-middle text-[10px]" onClick={stop}>
+                    <button className={MOVE_BTN} disabled={up === undefined} title="Move up (swap with the track above)" onClick={() => up !== undefined && ctl.swapTracks(i, up)}>
+                        ▲
+                    </button>
+                    <button className={MOVE_BTN} disabled={down === undefined} title="Move down (swap with the track below)" onClick={() => down !== undefined && ctl.swapTracks(i, down)}>
+                        ▼
+                    </button>
+                </span>
             </td>
             <td className={TD} onClick={stop}>
                 <NameInput value={t.name} onChange={(name) => ctl.setTrack(i, { name })} />
@@ -409,7 +512,31 @@ function TrackRow({ i, t, selected, ctl, ports }: { i: number; t: TrackView; sel
                     </select>
                 )}
             </td>
+            <td className="py-1 pr-3 text-right" onClick={stop}>
+                <RemoveButton label={`T${i + 1} ${t.name}`} onRemove={() => ctl.removeTrack(i)} />
+            </td>
         </tr>
+    );
+}
+
+/** × then "remove?": the second click removes (steps in all patterns go too). Resets when the pointer leaves. */
+function RemoveButton({ label, onRemove }: { label: string; onRemove(): void }) {
+    const [armed, setArmed] = useState(false);
+    return (
+        <button
+            onClick={() => (armed ? onRemove() : setArmed(true))}
+            onMouseLeave={() => setArmed(false)}
+            onBlur={() => setArmed(false)}
+            title={armed ? `Click again: remove ${label} with its steps in all patterns` : `Remove ${label}`}
+            aria-label={`Remove ${label}`}
+            className={
+                armed
+                    ? 'rounded-md bg-red-600 px-1.5 py-0.5 text-xs font-medium whitespace-nowrap text-white hover:bg-red-700'
+                    : 'rounded-md px-1.5 py-0.5 text-zinc-400 hover:bg-zinc-100 hover:text-red-600 dark:hover:bg-zinc-800'
+            }
+        >
+            {armed ? 'remove?' : '×'}
+        </button>
     );
 }
 
