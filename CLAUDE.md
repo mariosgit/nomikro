@@ -22,7 +22,7 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
 
 - `src/maschine/` **the driver** (framework-free, no imports from app/dev, public API in `index.ts`, docs in its README):
   `device.ts` (open, input dispatch, output queue lights-before-screen), `lights.ts` (state = 0x80 report buffer,
-  `pad()`/`strip()`/`button()`/`clear()`/`flush()`, `layer(name)` adds layers on top), `screen.ts`, `buttons.ts` / `pads.ts` (input decoding + report layouts),
+  `pad()`/`strip()`/`button()`/`clear()`/`flush()`, `layer(name)` adds layers on top), `screen.ts`, `buttons.ts` / `pads.ts` (input decoding + report layouts), `strip.ts` (`StripFingers`: two fingers on the touch strip, pinch),
   `hardware.ts` (ids, button/pad order, colors, `Color`/`LedButton` types)
 - `src/shell/` React shell: `App.tsx` (connect, header with app switcher, routing), `route.ts` (`#/<app>/<path>?<params>`),
   `device.ts` (`useDeviceTask()`: runs device tasks one after another across all apps, releases callbacks + lights after),
@@ -39,7 +39,7 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
 - `src/engine/` framework-free music engine: `clock.ts` (lookahead scheduler, worker tick, timebase performance.now() ms,
   `onStep` → `{index, time, duration}`, `at(time, fn)` for lights), `audio.ts` (shared AudioContext, `toAudioTime()`,
   unlocked on the first click on the page: pad presses don't count as a user gesture), `metronome.ts`, `midi.ts` (Web MIDI out: ports, timed notes; access requested on demand), `input.ts` (audio inputs via getUserMedia, voice processing off), `fx.ts` (master FX bus for punch-ins: sweeps, gate, pump, echo, reverb, crush, tape stop),
-  `instruments/` (sound engines, chosen per track by id: `types.ts` `DrumKit` / `Melodic` contract + `DRUM_ROLES` + `ParamDef` parameters (values per track, live `set()`),
+  `instruments/` (sound engines, chosen per track by id: `types.ts` `DrumKit` / `Melodic` contract + `DRUM_ROLES` + `ParamDef` parameters (values per track, live `set()`, `strip` = the pair for PLUG-IN + strip),
   `basic.ts` plain Web Audio, `tone.ts` Tone.js on our AudioContext, loaded on demand; registry `DRUM_KITS` / `MELODIC` in `index.ts`)
 - `src/dev/devlog.ts` dev-only logging to the dev server
 - `examples/minimal/` framework-free example page (`/examples/minimal/`); new pages go into `build.rollupOptions.input`
@@ -85,7 +85,7 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
   code path (`injectInput`), so input bugs can be reproduced without hands.
 - `mode=bench` measures write timing, `mode=stress` checks for lost lights reports (should end all green).
 - Modes: `show`, `demo`, `pad-levels`, `strip`, `buttons`, `input`, `events` (m.input edges/held state, `on`/`off`/`full` params), `layers` (light layers + held pads), `clock` (metronome + playhead, timing stats per bar, `bpm`/`swing`), `screen-fps` (screen animation: fps, reports/frame,
-  lights latency; `scene=grid|bar|full|text`, `fps`), `screen-rects` (raw rectangle reports, `rects=x:page:w:pages,…`, `pad=1`), `replay`, `bench`, `stress`, `off`.
+  lights latency; `scene=grid|bar|full|text`, `fps`), `screen-rects` (raw rectangle reports, `rects=x:page:w:pages,…`, `pad=1`), `two-sliders` (two values from the touch strip, `< >` / `map=pinch|drag|split`, raw finger positions in the log), `replay`, `bench`, `stress`, `off`.
 
 1. The dev server is usually already running (`npm start` → http://localhost:9000, Chrome/Chromium for WebHID).
    Check before starting another one: `ss -ltnp | grep 9000`.
@@ -149,6 +149,8 @@ ffmpeg -i seq%02d.jpg -vf "tile=4x2" -frames:v 1 contact.jpg
   0x40 'touched' pressure updates. Pressure is 12 bit.
 - Pads: number 0–15, pad 0 = bottom left (printed label "1"), pad 12 = top left. Row-major from the bottom.
 - Touch strip: 25 LEDs (`strip` 0–24, left → right). Touch position 1–200 left → right, 0 = not touched (`STRIP_MAX`).
+  Two fingers work (`position2`), but the two positions come sorted left → right, not in touch order: follow a finger by
+  continuity (nearest position): `StripFingers` in `src/maschine/strip.ts` (also `pinch()` → center + width).
 - Pad/strip level 1–3 (0 = off), byte = 4 × colorIndex + level. Raw level 0 is *not* off (dim); byte 0 is off. `Lights` clamps levels.
 - Buttons: brightness 0–4, no color. Raw bytes 0–3 and ≥128 = off, otherwise the low 2 bits count: `01 < 00 < 10 < 11` (hence the table 13, 12, 10, 11). `enc-push` / `enc-touched` have no LED; their indexes land on pad LEDs, so skip them.
 - Output timing (measured): LED report 16 ms, screen report ~38 ms, one report on the wire at a time.

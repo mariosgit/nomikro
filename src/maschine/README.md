@@ -102,6 +102,18 @@ m.input.heldButtons; m.input.heldPads; m.input.padPressure(3); m.input.strip;
 m.input.sensitivity = { on: 300, off: 120, full: 2500, window: 8 };  // press, release, velocity 1 (0..4095), velocity window ms
 ```
 
+Two fingers on the strip: `position` / `position2` come sorted left → right, not in touch order. `StripFingers` follows
+each finger (`slot` 0 = first down, 1 = second; `pos - prev` = its move) and gives a pinch:
+
+```ts
+const fingers = new StripFingers();
+m.input.on('strip', (e) => {
+    fingers.update(e.position, e.position2);
+    const p = fingers.pinch(); // two fingers: { center, width } 0..1 (width 0 up to 15 apart, 1 at 60 % of the strip)
+    const x = fingers.single(); // one finger 0..1, null after a pinch (lifting one finger doesn't jump)
+});
+```
+
 - Every event has `time` (`performance.now()` timebase, from the HID report's `timeStamp`).
 - `buttonUp.chorded`: something else went down while the button was held (pad, button, encoder turn, strip touch),
   so it was used as a modifier. A tap = short and not chorded. `enc-touched` (touching the encoder) never chords.

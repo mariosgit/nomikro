@@ -6,6 +6,7 @@ export type { ButtonState } from './buttons';
 export type { Lights, LightLayer } from './lights';
 export type { Screen, Draw } from './screen';
 export type { Input, InputEvent, InputEventType, InputEventOf, PadSensitivity } from './input';
+export { StripFingers, stripValue, type Finger, type Pinch } from './strip';
 export {
     VENDOR_ID,
     PRODUCT_ID,

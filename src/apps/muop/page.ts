@@ -81,8 +81,8 @@ export interface Page {
     /** The pads while held. Without it the pads stay playable. */
     cells?(): Cell[];
     padDown?(pad: number, velocity: number, time: number): void;
-    /** Strip position 1..200, 0 = released. Without it the strip keeps its normal job. */
-    strip?(position: number): void;
+    /** Strip position 1..200, 0 = released; position2 = a second finger (0 = none; the two come sorted left → right). Without it the strip keeps its normal job. */
+    strip?(position: number, position2: number): void;
     /** Encoder push while held. */
     apply?: Action;
     /** Short press (released < TAP_MS, nothing else touched). Runs on release. */
@@ -199,7 +199,7 @@ export class Pages {
             case 'strip': {
                 const page = this.active;
                 if (!page?.strip) return false;
-                page.strip(e.position);
+                page.strip(e.position, e.position2);
                 return true;
             }
             default:

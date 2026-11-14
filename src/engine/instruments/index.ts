@@ -6,15 +6,15 @@ import type { DrumKit, InstrumentDef, Melodic } from './types';
 export * from './types';
 
 export const DRUM_KITS: readonly InstrumentDef<DrumKit>[] = [
-    { id: 'basic', name: 'Simple kit', engine: 'Basic', params: BasicDrums.params, create: async (ctx, out, params) => new BasicDrums(ctx, out, params) },
-    { id: 'tone', name: 'Membrane kit', engine: 'Tone.js', params: TONE_DRUM_PARAMS, create: toneDrums },
+    { id: 'basic', name: 'Simple kit', engine: 'Basic', params: BasicDrums.params, strip: ['tone', 'decay'], create: async (ctx, out, params) => new BasicDrums(ctx, out, params) },
+    { id: 'tone', name: 'Membrane kit', engine: 'Tone.js', params: TONE_DRUM_PARAMS, strip: ['tone', 'decay'], create: toneDrums },
 ];
 
 export const MELODIC: readonly InstrumentDef<Melodic>[] = [
-    { id: 'basic-lead', name: 'Sub lead', engine: 'Basic', params: BasicLead.params, create: async (ctx, out, params) => new BasicLead(ctx, out, params) },
-    { id: 'tone-mono', name: 'Mono lead', engine: 'Tone.js', params: TONE_MONO_PARAMS, create: toneMono },
-    { id: 'tone-fm', name: 'FM', engine: 'Tone.js', params: TONE_FM_PARAMS, create: toneFm },
-    { id: 'tone-pad', name: 'Pad', engine: 'Tone.js', params: TONE_PAD_PARAMS, create: tonePad },
+    { id: 'basic-lead', name: 'Sub lead', engine: 'Basic', params: BasicLead.params, strip: ['cutoff', 'res'], create: async (ctx, out, params) => new BasicLead(ctx, out, params) },
+    { id: 'tone-mono', name: 'Mono lead', engine: 'Tone.js', params: TONE_MONO_PARAMS, strip: ['cutoff', 'res'], create: toneMono },
+    { id: 'tone-fm', name: 'FM', engine: 'Tone.js', params: TONE_FM_PARAMS, strip: ['index', 'decay'], create: toneFm },
+    { id: 'tone-pad', name: 'Pad', engine: 'Tone.js', params: TONE_PAD_PARAMS, strip: ['detune', 'attack'], create: tonePad },
 ];
 
 /** The def with this id, or the first one. */

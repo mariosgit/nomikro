@@ -23,10 +23,21 @@
 
 ## save/load...
 - [ ] share as a link: `#/muop?song=muop1:…` (the export string fits; ask before importing, or import as a new project).
-- [ ] sparse JSON (shorter strings, see TASK-MüOperator "Song sharing").
+- [ ] sparse JSON (shorter strings, notes below).
 - [ ] file download / upload (.json) besides the copy & paste text.
 - [ ] storage: each project is ~110 KB JSON, localStorage holds ~5 MB → about 40 projects. Store compressed or sparse
   when that gets tight (New / Duplicate / Import show an error when storage is full).
+- [ ] Optional: include the STAR favorites (separate localStorage) used by the song's tracks.
+
+Notes (moved from TASK-MüOperator "Song sharing"):
+- Measured: the full `Song` JSON is ~110–120 KB even when nearly empty (every slot stored: 16 × 16 pattern tracks
+  with 8 × 16 drum velocities each), plain base64 ~150–160 K chars. gzip + base64: new song ~1.4 K chars, all 16
+  patterns × 16 tracks filled with random steps ~16 K (brotli ~0.6 K / ~14.5 K).
+- URL: Chrome takes ~2 MB URLs; chat apps / QR codes (≤ ~2.9 KB) are tighter. On load from a link: ask before
+  importing (or import as a new project, never replace the current one).
+- Sparse share format: only non-empty patterns / tracks, drum hits as `[sound, step, vel]`, params only where set
+  → a typical song a few hundred chars before compression. Expand back to a full `Song` on load (like `migrateV1()`),
+  under a new tag (`muop2:`); `muop1:` strings keep working.
 
 ## More ...
 

@@ -3,6 +3,7 @@
 import { runLightShow } from './lightshow';
 import { TEST_MODES } from './tests';
 import { screenFps, screenProbe } from './screenprobe';
+import { twoSliders } from './strip2';
 import { untilAborted, type Mode } from './types';
 
 export type { Mode, ModeContext } from './types';
@@ -45,6 +46,7 @@ export const MODES = {
 
     'screen-fps': screenFps,
     'screen-rects': screenProbe,
+    'two-sliders': twoSliders,
 
     off: {
         label: 'Off',

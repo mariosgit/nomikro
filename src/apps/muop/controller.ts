@@ -1,7 +1,7 @@
 // μOp controller: device input → song edits / playback, song state → pad + button lights + display.
 // The page reads `view` (subscribe()); the device is the main instrument.
 // Everything (pads, STEP, REC, ERASE, SEARCH, STAR, VOLUME) acts on the selected track (SELECT + pad).
-import { LED_BUTTONS, STRIP_LEDS, STRIP_MAX, type Color, type InputEvent, type LedButton, type MaschineMikroMk3 } from '../../maschine';
+import { LED_BUTTONS, STRIP_LEDS, STRIP_MAX, StripFingers, type Color, type InputEvent, type LedButton, type MaschineMikroMk3 } from '../../maschine';
 import {
     CHORDS,
     DRUMS,
@@ -42,7 +42,7 @@ import { FX, isTrackFx } from './fx';
 import { devlog } from '../../dev/devlog';
 import { Metronome } from '../../engine/metronome';
 import { DRUM_SOUNDS, soundsFor, type Sounds } from './sounds';
-import { findInstrument, formatParam, randomParam, stepParam, type ParamDef, type Params, type Voice } from '../../engine/instruments';
+import { findInstrument, formatParam, paramFromUnit, paramToUnit, randomParam, stepParam, type ParamDef, type Params, type Voice } from '../../engine/instruments';
 import { Pages, TAP_MS, choiceBar, drawBar, rangeBar, type Bar, type Cell, type Help, type Page, type Param } from './page';
 import { addFavorite, favoriteOf, favorites, indexIn, removeFavorite, soundList, type SoundEntry } from './favorites';
 import { History } from './history';
@@ -193,6 +193,10 @@ export class MuOpController {
     private stepMode = false;
     private recording = false;
     private drumSound = 0;
+    /** PLUG-IN + strip: the fingers (pinch = two sound parameters). */
+    private pluginStrip = new StripFingers();
+    /** VARIATION + strip: the fingers (pinch = déjà vu + density). */
+    private variationStrip = new StripFingers();
     /** Per track: the note / chord written by step taps. */
     private pens: number[];
     private step = -1;
@@ -376,6 +380,40 @@ export class MuOpController {
 
     setParam(track: number, def: ParamDef, value: number): void {
         this.setParams(track, { ...this.song.tracks[track].params, [def.id]: value });
+    }
+
+    /** The two parameters on the strip while PLUG-IN is held (the instrument's `strip` pair, else its first two continuous ones). */
+    private stripParams(): [ParamDef, ParamDef] | null {
+        const kind = this.cur.kind;
+        if (!kind) return null;
+        const shown = this.shownParams();
+        const byId = (id: string) => shown.find((d) => d.id === id || d.id.endsWith(`.${id}`));
+        const pair = findInstrument(soundsFor(kind), this.cur.sound).strip?.map(byId);
+        if (pair?.[0] && pair[1]) return [pair[0], pair[1]];
+        const continuous = shown.filter((d) => !d.options && !d.int);
+        return continuous.length >= 2 ? [continuous[0], continuous[1]] : null;
+    }
+
+    /** PLUG-IN + strip: one finger = the first strip parameter, pinch = first (middle) + second (distance). */
+    private soundStrip(position: number, position2: number): void {
+        const fingers = this.pluginStrip;
+        fingers.update(position, position2);
+        const pair = this.stripParams();
+        if (!pair) return;
+        const [a, b] = pair;
+        const pinch = fingers.pinch();
+        const one = fingers.single(); // null after a pinch: lifting one finger doesn't jump
+        const params = { ...this.cur.params };
+        if (pinch) {
+            params[a.id] = paramFromUnit(a, pinch.center);
+            params[b.id] = paramFromUnit(b, pinch.width);
+        } else if (one !== null) params[a.id] = paramFromUnit(a, one);
+        else return;
+        this.setParams(this.track, params);
+        this.stripValue(paramToUnit(a, params[a.id]), 'yellow');
+        const va = formatParam(a, params[a.id]);
+        if (pinch) this.say(`${a.name} ${va}\n${b.name}: ${formatParam(b, params[b.id])}`, paramBar(b, params[b.id]));
+        else this.say(`${this.pages.active?.name ?? 'Sound'}\n${a.name}: ${va}`, paramBar(a, params[a.id]));
     }
 
     /** PLUG-IN + push (and the sound editor): random values for the shown parameters. */
@@ -941,12 +979,21 @@ export class MuOpController {
                     c.pages.refresh();
                 };
             },
+            open: () => {
+                c.pluginStrip = new StripFingers();
+            },
+            close: () => c.stripValue(null),
+            strip: (position, position2) => c.soundStrip(position, position2),
             apply: { name: 'Randomize the sound (drums: the selected drum sound); stored, a short press goes back', run: () => c.randomize(c.track) },
             tap: { name: 'Back to the sound before the last randomize; again = forward (A/B)', run: () => c.revert(c.track) },
             help: [
                 {
                     keys: 'PLUG-IN + < > + encoder',
                     text: 'Sound (the browser), then the instrument’s parameters (wave, cutoff, envelope, …, Drive = distortion). Changes play right away and are saved with the track',
+                },
+                {
+                    keys: 'PLUG-IN + strip',
+                    text: 'Two sound parameters at once. One finger: the first (by position). Two fingers (pinch): the first at their middle + the second by their distance. Sub lead / Mono lead: cutoff + resonance, FM: FM amount + decay, Pad: detune + attack, drums: tone + decay of the selected drum sound',
                 },
                 { keys: 'PLUG-IN + pad 1–8', text: 'Drums: pick the drum sound to edit (Tune, Decay, Tone, Level, Drive per drum sound)' },
             ],
@@ -960,8 +1007,6 @@ export class MuOpController {
             hint: 'pad = function',
             modifier: true,
             buttons: ['tap'],
-            close: () => c.stripValue(null),
-            strip: (position) => c.liveDensity(position),
             cells: () => fns.map((f) => (f.run && f.available() ? { color: f.color, level: 1 } : OFF)),
             padDown: (pad) => {
                 const f = fns[pad];
@@ -977,10 +1022,6 @@ export class MuOpController {
                 {
                     keys: 'SHIFT + pad 1–16',
                     text: 'Undo / Redo = a whole gesture (everything while something was held, or a recording pass); Step undo / redo = one edit. Nudge moves the track one step (STEP mode on drums: only the selected sound). Clear = the track in this pattern, Clear auto = the recorded FX. Copy / Paste = the track’s steps (into a track of the same kind). Octave = the track’s octave',
-                },
-                {
-                    keys: 'SHIFT + strip',
-                    text: 'Density of the selected track, live (orange bar): re-generates its pattern with déjà vu locked, so the same groove gets thinner ↔ busier. For breaks. A hand-made pattern gets replaced on the first move; undo with SHIFT + pad 1',
                 },
                 { keys: 'SHIFT + TAP', text: 'Metronome on/off (TAP blinks on the beat while on)' },
             ],
@@ -1060,14 +1101,26 @@ export class MuOpController {
                 g.auto = AUTO_BARS[(AUTO_BARS.indexOf(g.auto as (typeof AUTO_BARS)[number]) + 1) % AUTO_BARS.length];
                 return variation.params!.findIndex((p) => p.name === 'Auto'); // show it
             },
-            open: () => c.stripValue(c.generator(c.track).settings.dejaVu, 'violet'),
+            open: () => {
+                c.variationStrip = new StripFingers();
+                c.stripValue(c.generator(c.track).settings.dejaVu, 'violet');
+            },
             close: () => c.stripValue(null),
-            strip: (position) => {
-                if (!position) return;
+            // one finger = déjà vu; two (pinch) = déjà vu at their middle + density by their distance
+            strip: (position, position2) => {
+                const fingers = c.variationStrip;
+                fingers.update(position, position2);
                 const g = c.generator(c.track).settings;
-                g.dejaVu = Math.round(((position - 1) / (STRIP_MAX - 1)) * 20) / 20;
+                const step = (v: number) => Math.round(v * 20) / 20;
+                const pinch = fingers.pinch();
+                const one = fingers.single(); // null after a pinch: lifting one finger doesn't jump
+                if (pinch) {
+                    g.dejaVu = step(pinch.center);
+                    g.density = step(pinch.width);
+                } else if (one !== null) g.dejaVu = step(one);
+                else return;
                 c.stripValue(g.dejaVu, 'violet');
-                c.say(`Variation\nDeja vu: ${pct(g.dejaVu)}%`);
+                c.say(`Variation\nDV ${pct(g.dejaVu)}%  Dens ${pct(g.density)}%`, pinch ? { value: g.density } : null);
             },
             apply: { name: 'Generate a variation into the current pattern (drums in STEP mode: only the selected sound)', run: () => c.generate(c.track) },
             tap: { name: 'Generate a variation (same as push)', run: () => c.generate(c.track) },
@@ -1076,7 +1129,10 @@ export class MuOpController {
                     keys: 'VARIATION',
                     text: 'Random patterns, Marbles style. Empty track or any track: makes a pattern from scratch. Déjà vu sets the depth: low = a lot changes, ½ = the same pattern (reshape it with density / bias / spread / steps), high = shuffled. Undo with SHIFT + pad 1',
                 },
-                { keys: 'VARIATION + strip', text: 'Déjà vu (the strip shows it in violet while VARIATION is held)' },
+                {
+                    keys: 'VARIATION + strip',
+                    text: 'One finger: déjà vu (the strip shows it in violet while VARIATION is held). Two fingers (pinch): déjà vu at their middle + density by their distance (close = 0, ~60 % of the strip apart = 100 %, bar on the display)',
+                },
                 { keys: 'VARIATION + AUTO', text: 'Auto: off → every 1 → 2 → 4 bars → off (AUTO lit while auto is on)' },
             ],
         };
@@ -1429,25 +1485,6 @@ export class MuOpController {
         this.saveSoon();
         if (announce) this.say(`Variation ${pct(g.settings.dejaVu)}%\n${one !== undefined ? DRUM_SOUNDS[one].name : this.label(track)}`);
         this.update();
-    }
-
-    /** SHIFT + strip: the selected track's density, re-generated live with déjà vu locked (same pattern identity). */
-    private liveDensity(position: number): void {
-        if (!position) return this.stripValue(null);
-        if (!this.cur.kind) return this.say(`${this.label(this.track)}\n${EMPTY}`);
-        const g = this.generator(this.track).settings;
-        const density = Math.round(((position - 1) / (STRIP_MAX - 1)) * 20) / 20;
-        this.stripValue(density, 'orange');
-        if (density === g.density) return;
-        g.density = density;
-        const dejaVu = g.dejaVu;
-        g.dejaVu = 0.5;
-        try {
-            this.generate(this.track, this.seq.pattern, false);
-        } finally {
-            g.dejaVu = dejaVu;
-        }
-        this.say(`Density ${pct(density)}%\n${this.label(this.track)}`);
     }
 
     /**

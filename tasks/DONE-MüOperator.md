@@ -54,7 +54,7 @@ Mapping and controls: see the page (cheat sheet) and `src/apps/muop/controller.t
   - 15 Octave −, 16 Octave +: the track's octave (notes / chords).
 - SHIFT + TAP = metronome. SHIFT + SEARCH / SHIFT + VOLUME dropped: covered by the SEARCH page (encoder browses,
   short press = next) and the VOLUME page (`< >` track / master).
-- SHIFT + strip = density of the selected track, live (orange bar), re-generated with déjà vu locked (part 9).
+- SHIFT + strip = density of the selected track, live (orange bar), re-generated with déjà vu locked (part 9). Removed 2026-11-14: confusing, changed the track's generator setting; VARIATION + strip pinch sets density now.
 
 ### 3. SELECT page (track settings)
 Device: hold SELECT, pad = track, `< >` + encoder = setting of the selected track. App page: the track list has the
@@ -122,7 +122,7 @@ same settings plus the ones that are only set there (name, MIDI out).
 
 ### 9. Workflow
 - STEP held (long or used with pads) = temporary switch to the other view, release = back; short press toggles.
-- SHIFT + strip = live density for breaks (see part 2).
+- SHIFT + strip = live density for breaks (see part 2). Removed 2026-11-14.
 
 ### 10. Display
 - `screen.idle()` in the driver: while playing, the blanked display shows the position as in the app status bar,
@@ -142,3 +142,17 @@ same settings plus the ones that are only set there (name, MIDI out).
 - Audio inputs (app only): USB audio of external synths, several at once (`src/engine/input.ts`, `src/apps/muop/inputs.ts`).
   Inputs tab: per input device / level / mute / meter / status (permission, unplugged → reopens on replug); saved on
   this computer (localStorage). Mixer: one "Inputs" strip (summed) → strip filter → PERFORM mix FX → master.
+
+### 12. MUTE / SOLO on the device (2026-11-14)
+- MUTE + pad: track on / off, right away (pads show the tracks: bright = plays, dim = muted), MUTE tap = all on.
+- SOLO + pad 1–8: drum sound on / off on the drums track (the selected one, else the first; `Track.drumMute` bits,
+  saved in the song, old songs get 0), SOLO tap = all on. Only the sequencer skips them, live pads still play.
+- MUTE / SOLO lit while something is muted. Track solo stays in the app mixer.
+
+### 13. Song sharing, base (2026-11-14)
+- Projects in localStorage (list + active, new / duplicate / rename / delete), project bar on the app page, PROJECT
+  page on the device (seamless switch at the next bar with a countdown).
+- Export / import as copy & paste text `muop1:<gzip base64url>` (~1.8 K chars for a typical song), versioned: the tag
+  says the encoding, the song keeps its `version`; all loads go through `parseSong()` (checks, defaults, v1 migration,
+  "made with a newer μOp" for unknown versions).
+- Details + what's open (link, sparse format, file download, storage): [TASK-ProjectSharing.md](TASK-ProjectSharing.md).

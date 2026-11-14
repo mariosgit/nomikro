@@ -38,8 +38,8 @@ Rules:
 | PATTERN | patterns (select / chain) | – | – | – |
 | PERFORM | FX 1–8 track, 9–16 mix | FX settings (later) | FX amount (later) | – |
 | CHORDS | 12 roots + 4 scales | root, scale, voicing | – | press = chords track |
-| VARIATION | playable | density, déjà vu, bias, spread, steps, auto (also AUTO: off → 1 → 2 → 4) | déjà vu | generate |
-| PLUG-IN | playable (drums: drum sound select) | sound, the instrument's parameters | macro / morph (later) | push = randomize, short = A/B |
+| VARIATION | playable | density, déjà vu, bias, spread, steps, auto (also AUTO: off → 1 → 2 → 4) | déjà vu (pinch: + density) | generate |
+| PLUG-IN | playable (drums: drum sound select) | sound, the instrument's parameters | 2 params: 1 finger / pinch (`strip` pair per instrument) | push = randomize, short = A/B |
 | Held step pad (STEP mode) | hold + later step = length | note / chord, length | – | – |
 | MUTE / SOLO | MUTE: tracks, SOLO: drum sounds | – | – | tap = unmute all |
 | TEMPO / SWING / VOLUME | – | value (VOLUME: `< >` track / master) | – | – |
@@ -73,23 +73,6 @@ Rules:
 - [ ] Sound visualizer (scope / spectrum of the master, from the meter analysers).
 - [ ] Chain view (the 16 patterns + the chain, click to queue / edit).
 - [ ] WAV recording of the master (MediaRecorder): keep a jam.
-- [/] Song sharing: file download / load (JSON: backup, move songs between computers) and share as URL.
-  Base done: projects + export / import as `muop1:` text, see [TASK-ProjectSharing.md](TASK-ProjectSharing.md). Open: link, sparse, file.
-  - Measured: the full `Song` JSON is ~110–120 KB even when nearly empty (every slot stored: 16 × 16 pattern tracks
-    with 8 × 16 drum velocities each), plain base64 ~150–160 K chars. gzip + base64: new song ~1.4 K chars, all 16
-    patterns × 16 tracks filled with random steps ~16 K (brotli ~0.6 K / ~14.5 K).
-  - URL: `#/muop?song=<gzip+base64url>`, built-in `CompressionStream('gzip')` / `DecompressionStream`, no library.
-    Chrome takes ~2 MB URLs; chat apps / QR codes (≤ ~2.9 KB) are tighter.
-  - Shorter: a sparse share format (only non-empty patterns / tracks, drum hits as `[sound, step, vel]`, params only
-    where set) → a typical song a few hundred chars before compression. Expand back to a full `Song` on load, like `migrateV1()` does for v1.
-  - Optional: include the STAR favorites (separate localStorage) used by the song's tracks.
-  - Version everything: the song keeps its `version` field (now 2, bump it on breaking model changes and add a
-    migration step), and the share format gets its own tag in front of the payload, e.g. `song=1.<data>`
-    (1 = gzip JSON, 2 = sparse, …), so an old link is decoded with the right decoder. Files: `{ app: 'muop',
-    format: 1, song }`. A newer version than the app knows → a clear "made with a newer μOp" message, not a broken song.
-  - Import goes through the same checks + defaults as `loadSong()` (pull them out into one `parseSong()`), so old
-    files / links keep working.
-  - On load from URL: ask before replacing the current song (undo / keep a backup of the old one).
 - [ ] Computer keyboard shortcuts (space = play, …).
 - [ ] MIDI routing presets per synth (port, channel, which tracks), app only. Choice of project midi settings or own.
 - [ ] Mixer: MIDI ↔ internal switch in the strip; MIDI tracks: fader sends CC 7 (volume) to the synth.
@@ -97,12 +80,7 @@ Rules:
 - [ ] Audio inputs: latency compensation (send MIDI earlier by the input latency, set by ear or measured), channel
   pair choice on multi-channel interfaces, Drive on the inputs.
 
-### 2. MUTE / SOLO on the device
-- [x] MUTE + pad: track on / off (pads show the tracks: bright = plays, dim = muted), MUTE tap = all on.
-  SOLO + pad 1–8: drum sound on / off on the drums track (selected one, else the first; `Track.drumMute` bits, saved
-  in the song), SOLO tap = all on. Lit while something is muted. Track solo stays in the app mixer.
-
-### 3. Workflow: drops
+### 2. Workflow: drops
 - [ ] Any way to generate a drop now and then? Ideas:
   - "Drop" param on the VARIATION page: every 8 / 16 bars the bar before goes sparse (kick + hats only or
     silence on the last beats), then the full pattern hits on the 1.
@@ -110,7 +88,7 @@ Rules:
   - Auto density curve: with Auto on, density walks down over n bars and snaps back (build-up / breakdown).
   - IDEA: how about a perform FX, that mutes parts of drums until the next bar or 2... maybe add randomness to what gets muted... could mute base line to... leave the lead running... sparce chords...
 
-### 4. Sounds
+### 3. Sounds
 Moved to [TASK-SOUNDS.md](TASK-SOUNDS.md) (engines, sound tuning, plugins).
 
 ## Later
@@ -122,7 +100,6 @@ Moved to [TASK-SOUNDS.md](TASK-SOUNDS.md) (engines, sound tuning, plugins).
 - **VARIATION:** save the generator settings in the song; a "sound" target (vary the track's sound with déjà vu; until
   then PLUG-IN + push randomizes the sound); Grids-style drum map (own data, Grids is GPL-3.0) if the Marbles-style
   drums aren't enough.
-  - SHIFT + strip = density + trigger... not to usefull for drops (confusing and out of concept). Because it changes the track setting and with auto=on it will regenerate a sparse pattern. Better workout a DROP feature, it was on some list...
 - **Notes:** per-track Poly setting (SELECT page) to let notes overlap (pads, drones).
 - **PERFORM:** strip = FX amount, FX settings on `< >`, more track FX (octave up, random steps), per-track sends
   instead of the whole mix.

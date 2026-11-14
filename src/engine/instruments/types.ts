@@ -59,6 +59,11 @@ export interface InstrumentDef<T> {
     engine: string;
     /** Its parameters (drum kits: drumParams(), ids "<sound>.<id>"). */
     params: readonly ParamDef[];
+    /**
+     * The two parameters for the touch strip (μOp PLUG-IN + strip): [one finger / pinch center, pinch width].
+     * Drum kits: ids without the "<sound>." prefix (the selected drum sound's). Missing = the first two continuous ones.
+     */
+    strip?: readonly [string, string];
     /** Builds the instrument with these values (missing = defaults), connected to `out`. */
     create(ctx: AudioContext, out: AudioNode, params: Params): Promise<T>;
 }
@@ -81,6 +86,18 @@ export function stepParam(def: ParamDef, v: number, delta: number): number {
     if (def.options || def.int) return clampParam(def, Math.round(v) + delta);
     if (def.log && def.min > 0) return clampParam(def, v * Math.pow(def.max / def.min, delta / ENCODER_STEPS));
     return clampParam(def, v + (delta * (def.max - def.min)) / ENCODER_STEPS);
+}
+
+/** Value → 0..1 over the range (log params logarithmically, like the encoder). */
+export function paramToUnit(def: ParamDef, v: number): number {
+    const u = def.log && def.min > 0 ? Math.log(v / def.min) / Math.log(def.max / def.min) : (v - def.min) / (def.max - def.min);
+    return Math.min(1, Math.max(0, u));
+}
+
+/** 0..1 → value (inverse of paramToUnit), e.g. from a strip position. */
+export function paramFromUnit(def: ParamDef, u: number): number {
+    const x = Math.min(1, Math.max(0, u));
+    return clampParam(def, def.log && def.min > 0 ? def.min * Math.pow(def.max / def.min, x) : def.min + x * (def.max - def.min));
 }
 
 /** A random value from the param's random range. */
