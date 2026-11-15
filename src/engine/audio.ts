@@ -5,8 +5,18 @@
 
 let ctx: AudioContext | null = null;
 
+/**
+ * Output buffer size: 'interactive' (default, smallest), 'balanced', 'playback' or seconds (e.g. 0.02).
+ * Override for testing with `?latency=…` in the page URL (before the #): a too small buffer underruns = crackles.
+ */
+function latencyHint(): AudioContextLatencyCategory | number {
+    const v = new URLSearchParams(location.search).get('latency');
+    if (v === 'interactive' || v === 'balanced' || v === 'playback') return v;
+    return v && Number(v) > 0 ? Number(v) : 'interactive';
+}
+
 export function audioContext(): AudioContext {
-    return (ctx ??= new AudioContext({ latencyHint: 'interactive' }));
+    return (ctx ??= new AudioContext({ latencyHint: latencyHint() }));
 }
 
 /** True once audio can actually play. */

@@ -31,81 +31,123 @@ const clampN = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, 
 export const TONE_DRUM_PARAMS = drumParams();
 
 /**
+ * Voices per drum sound: a hit takes the quietest voice at its time, a new one if all still sound (up to `max`).
+ * Tone's synths are monophonic: retriggering one that still rings jumps its envelope to the new velocity within a
+ * fraction of a ms = a click on a loud low kick (long Decay, a softer hit after a louder one). So it rings out instead.
+ */
+const SILENT_LEVEL = 0.01;
+function voices<T extends { envelope: { getValueAtTime(t: number): number } }>(max: number, make: () => T): { at(t: number): T } {
+    const all = [make()];
+    return {
+        at(t) {
+            let best = all[0];
+            let level = Infinity;
+            for (const v of all) {
+                const l = v.envelope.getValueAtTime(t);
+                if (l < level) (best = v), (level = l);
+            }
+            if (level > SILENT_LEVEL && all.length < max) all.push((best = make()));
+            return best;
+        },
+    };
+}
+
+/**
  * Drum kit from Tone's drum synths: MembraneSynth (kick, toms), NoiseSynth (snare, clap), MetalSynth (hats, cowbell).
  * Per drum sound: Tune, Decay, Tone (kick / toms: pitch sweep, snare / clap: filter, hats / cowbell: metal color), Level.
- * No live set(): the mixer rebuilds the kit on changes.
+ * Voices per sound as needed (see voices()). No live set(): the mixer rebuilds the kit on changes.
  */
 export async function toneDrums(ctx: AudioContext, out: AudioNode, params: Params): Promise<DrumKit> {
     const T = await loadTone(ctx);
     const [kv, sv, chv, ohv, clv, ltv, htv, cbv] = DRUM_ROLES.map((_, i) => drumValues(params, i));
+    // each drum sound through its own drive stage
+    const stages = [kv, sv, chv, ohv, clv, ltv, htv, cbv].map((v) => driveStage(ctx, out, v.drive));
+    const nodes: { dispose(): unknown }[] = [];
+    /** Up to n voices of a synth into drum sound `sound`'s drive stage (or into `into`). */
+    const pool = <S extends { connect(n: AudioNode | InstanceType<ToneLib['Filter']>): unknown; dispose(): unknown; envelope: { getValueAtTime(t: number): number } }>(
+        n: number,
+        sound: number,
+        make: () => S,
+        into?: InstanceType<ToneLib['Filter']>,
+    ) =>
+        voices(n, () => {
+            const synth = make();
+            synth.connect(into ?? stages[sound].input);
+            nodes.push(synth);
+            return synth;
+        });
+    const filter = (sound: number, hz: number, type: 'highpass' | 'bandpass') => {
+        const f = new T.Filter(hz, type);
+        f.connect(stages[sound].input);
+        nodes.push(f);
+        return f;
+    };
 
     const kickHz = 32.7 * semis(kv.tune); // C1
-    const kick = new T.MembraneSynth({
-        pitchDecay: 0.05,
-        octaves: clampN(6 * kv.tone, 1, 10),
-        envelope: { attack: 0.001, decay: 0.4 * kv.decay, sustain: 0 },
-        volume: -1 + db(kv.level),
-    });
-    const snareHp = new T.Filter(clampN(1500 * sv.tone, 200, 12000), 'highpass');
-    const snare = new T.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.001, decay: 0.18 * sv.decay, sustain: 0 }, volume: -7 + db(sv.level) });
+    const kick = pool(8, 0, () =>
+        new T.MembraneSynth({
+            pitchDecay: 0.05,
+            octaves: clampN(6 * kv.tone, 1, 10),
+            envelope: { attack: 0.001, decay: 0.4 * kv.decay, sustain: 0 },
+            volume: -1 + db(kv.level),
+        }),
+    );
+    const snareHp = filter(1, clampN(1500 * sv.tone, 200, 12000), 'highpass');
+    const snare = pool(4, 1, () => new T.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.001, decay: 0.18 * sv.decay, sustain: 0 }, volume: -7 + db(sv.level) }), snareHp);
     const snareBodyHz = 98 * semis(sv.tune); // G2
-    const snareBody = new T.MembraneSynth({ pitchDecay: 0.02, octaves: 2, envelope: { attack: 0.001, decay: 0.1 * sv.decay, sustain: 0 }, volume: -11 + db(sv.level) });
-    const hat = (v: DrumValues, decay: number) =>
+    const snareBody = pool(4, 1, () => new T.MembraneSynth({ pitchDecay: 0.02, octaves: 2, envelope: { attack: 0.001, decay: 0.1 * sv.decay, sustain: 0 }, volume: -11 + db(sv.level) }));
+    const hat = (sound: number, v: DrumValues, decay: number) =>
+        pool(4, sound, () =>
+            new T.MetalSynth({
+                envelope: { attack: 0.001, decay: decay * v.decay, release: 0.01 },
+                harmonicity: 5.1,
+                modulationIndex: 32,
+                resonance: clampN(4000 * v.tone, 500, 12000),
+                octaves: 1.5,
+                volume: -23 + db(v.level),
+            }),
+        );
+    const closedHat = hat(2, chv, 0.05);
+    const openHat = hat(3, ohv, 0.4);
+    const clapBp = filter(4, clampN(1200 * clv.tone * semis(clv.tune), 200, 10000), 'bandpass');
+    const clap = pool(4, 4, () => new T.NoiseSynth({ noise: { type: 'pink' }, envelope: { attack: 0.005, decay: 0.15 * clv.decay, sustain: 0 }, volume: -5 + db(clv.level) }), clapBp);
+    const tom = (sound: number, v: DrumValues, decay: number) =>
+        pool(6, sound, () =>
+            new T.MembraneSynth({ pitchDecay: 0.08, octaves: clampN(2 * v.tone, 0.5, 8), envelope: { attack: 0.001, decay: decay * v.decay, sustain: 0 }, volume: -5 + db(v.level) }),
+        );
+    const lowTom = tom(5, ltv, 0.35);
+    const highTom = tom(6, htv, 0.28);
+    const cowbell = pool(4, 7, () =>
         new T.MetalSynth({
-            envelope: { attack: 0.001, decay: decay * v.decay, release: 0.01 },
-            harmonicity: 5.1,
-            modulationIndex: 32,
-            resonance: clampN(4000 * v.tone, 500, 12000),
-            octaves: 1.5,
-            volume: -23 + db(v.level),
-        });
-    const closedHat = hat(chv, 0.05);
-    const openHat = hat(ohv, 0.4);
-    const clapBp = new T.Filter(clampN(1200 * clv.tone * semis(clv.tune), 200, 10000), 'bandpass');
-    const clap = new T.NoiseSynth({ noise: { type: 'pink' }, envelope: { attack: 0.005, decay: 0.15 * clv.decay, sustain: 0 }, volume: -5 + db(clv.level) });
-    const tom = (v: DrumValues, decay: number) =>
-        new T.MembraneSynth({ pitchDecay: 0.08, octaves: clampN(2 * v.tone, 0.5, 8), envelope: { attack: 0.001, decay: decay * v.decay, sustain: 0 }, volume: -5 + db(v.level) });
-    const lowTom = tom(ltv, 0.35);
-    const highTom = tom(htv, 0.28);
-    const cowbell = new T.MetalSynth({
-        envelope: { attack: 0.001, decay: 0.25 * cbv.decay, release: 0.05 },
-        harmonicity: 1.4,
-        modulationIndex: 2,
-        resonance: clampN(800 * cbv.tone, 200, 8000),
-        octaves: 0.5,
-        volume: -21 + db(cbv.level),
-    });
-
-    snare.connect(snareHp);
-    clap.connect(clapBp);
-    // each drum sound through its own drive stage
-    const values = [kv, sv, chv, ohv, clv, ltv, htv, cbv];
-    const stages = values.map((v) => driveStage(ctx, out, v.drive));
-    const outputs = [kick, snareHp, snareBody, closedHat, openHat, clapBp, lowTom, highTom, cowbell];
-    const soundOf = [0, 1, 1, 2, 3, 4, 5, 6, 7];
-    outputs.forEach((node, i) => node.connect(stages[soundOf[i]].input));
-    const all = [...outputs, snare, clap];
+            envelope: { attack: 0.001, decay: 0.25 * cbv.decay, release: 0.05 },
+            harmonicity: 1.4,
+            modulationIndex: 2,
+            resonance: clampN(800 * cbv.tone, 200, 8000),
+            octaves: 0.5,
+            volume: -21 + db(cbv.level),
+        }),
+    );
 
     return {
         trigger(sound, t, velocity) {
             const v = 0.3 + 0.7 * velocity;
             safe(() => {
                 switch (sound) {
-                    case 0: return kick.triggerAttackRelease(kickHz, 0.3, t, v);
+                    case 0: return kick.at(t).triggerAttackRelease(kickHz, 0.3, t, v);
                     case 1:
-                        snare.triggerAttackRelease(0.15, t, v);
-                        return snareBody.triggerAttackRelease(snareBodyHz, 0.08, t, v);
-                    case 2: return closedHat.triggerAttackRelease(400 * semis(chv.tune), 0.05, t, v);
-                    case 3: return openHat.triggerAttackRelease(400 * semis(ohv.tune), 0.4, t, v);
-                    case 4: return clap.triggerAttackRelease(0.12, t, v);
-                    case 5: return lowTom.triggerAttackRelease(49 * semis(ltv.tune), 0.3, t, v); // G1
-                    case 6: return highTom.triggerAttackRelease(73.4 * semis(htv.tune), 0.25, t, v); // D2
-                    case 7: return cowbell.triggerAttackRelease(560 * semis(cbv.tune), 0.2, t, v);
+                        snare.at(t).triggerAttackRelease(0.15, t, v);
+                        return snareBody.at(t).triggerAttackRelease(snareBodyHz, 0.08, t, v);
+                    case 2: return closedHat.at(t).triggerAttackRelease(400 * semis(chv.tune), 0.05, t, v);
+                    case 3: return openHat.at(t).triggerAttackRelease(400 * semis(ohv.tune), 0.4, t, v);
+                    case 4: return clap.at(t).triggerAttackRelease(0.12, t, v);
+                    case 5: return lowTom.at(t).triggerAttackRelease(49 * semis(ltv.tune), 0.3, t, v); // G1
+                    case 6: return highTom.at(t).triggerAttackRelease(73.4 * semis(htv.tune), 0.25, t, v); // D2
+                    case 7: return cowbell.at(t).triggerAttackRelease(560 * semis(cbv.tune), 0.2, t, v);
                 }
             });
         },
         dispose() {
-            for (const node of all) node.dispose();
+            for (const node of nodes) node.dispose();
             for (const stage of stages) stage.dispose();
         },
     };

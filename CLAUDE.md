@@ -85,7 +85,7 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
   code path (`injectInput`), so input bugs can be reproduced without hands.
 - `mode=bench` measures write timing, `mode=stress` checks for lost lights reports (should end all green).
 - Modes: `show`, `demo`, `pad-levels`, `strip`, `buttons`, `input`, `events` (m.input edges/held state, `on`/`off`/`full` params), `layers` (light layers + held pads), `clock` (metronome + playhead, timing stats per bar, `bpm`/`swing`), `screen-fps` (screen animation: fps, reports/frame,
-  lights latency; `scene=grid|bar|full|text`, `fps`), `screen-rects` (raw rectangle reports, `rects=x:page:w:pages,…`, `pad=1`), `two-sliders` (two values from the touch strip, `< >` / `map=pinch|drag|split`, raw finger positions in the log), `replay`, `bench`, `stress`, `off`.
+  lights latency; `scene=grid|bar|full|text`, `fps`), `screen-rects` (raw rectangle reports, `rects=x:page:w:pages,…`, `pad=1`), `two-sliders` (two values from the touch strip, `< >` / `map=pinch|drag|split`, raw finger positions in the log), `drum-render` (two drum sounds through a kit, `kit=tone|basic`, `a`/`b`, `bpm`, `drive`; offline: "together − each alone"; `live=a|b|both`: plays it, records inside the graph (AudioWorklet) and compares with an offline twin, `sched=lookahead|upfront`; `live=sine`: test tone; `params=song`: the active μOp project's drums-track settings, `song=1` logs its tracks, `dump=<s>` logs samples. BlackHole + ffmpeg capture skips 512-frame buffers by itself, not usable for click hunting), `replay`, `bench`, `stress`, `off`.
 
 1. The dev server is usually already running (`npm start` → http://localhost:9000, Chrome/Chromium for WebHID).
    Check before starting another one: `ss -ltnp | grep 9000`.
@@ -161,6 +161,14 @@ ffmpeg -i seq%02d.jpg -vf "tile=4x2" -frames:v 1 contact.jpg
 - Lights report 0x80 is **80 bytes** (descriptor). Button report: see `src/maschine/buttons.ts` (byte 6 encoder, 9 strip).
 - Display shows the current scene name (`maschine.screen.set`), auto-blanks after 3 s.
 - Display is an aged OLED (ssd1303 or so) it shall blank after some seconds to save it...
+
+## Web Audio notes (measured with `drum-render`)
+
+- Keep the channel count fixed in front of filters / shapers: when it changes (a stereo source such as Tone's noise
+  connects, or Tone disposes it later in idle time), Chrome rebuilds the BiquadFilter / WaveShaper and its state is lost
+  = a click on a ringing kick. `driveStage()` and the input bus are pinned to 2 channels. Offline renders don't show it
+  (Tone doesn't dispose there), so compare live in-graph recordings (`live=…&chain=muop&tap=…`) with the offline twin.
+- Tone's synths are monophonic: retriggering a ringing one jumps its envelope (click). The Tone kit uses voice pools.
 
 ## Known limits (not solved)
 

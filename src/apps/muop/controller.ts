@@ -50,6 +50,7 @@ import { Inputs } from './inputs';
 import { requestMidi } from '../../engine/midi';
 import { harmonyTrack, nextChordWeights, trackMidis } from './harmony';
 import { AUTO_BARS, Generator, type GenSettings } from './variation';
+import { lambada } from './lambada';
 import { projects, type ProjectInfo } from './projects';
 
 /** The project the controller plays (projects.ts): saving goes there, open() switches (the page restarts the controller). */
@@ -197,6 +198,8 @@ export class MuOpController {
     private pluginStrip = new StripFingers();
     /** VARIATION + strip: the fingers (pinch = déjà vu + density). */
     private variationStrip = new StripFingers();
+    /** SHIFT + VARIATION ran the lambada: this press's tap doesn't generate a variation. */
+    private lambadaPress = false;
     /** Per track: the note / chord written by step taps. */
     private pens: number[];
     private step = -1;
@@ -1103,6 +1106,8 @@ export class MuOpController {
             },
             open: () => {
                 c.variationStrip = new StripFingers();
+                c.lambadaPress = held('shift');
+                if (c.lambadaPress) return c.lambada(); // easter egg, not in the cheat sheet
                 c.stripValue(c.generator(c.track).settings.dejaVu, 'violet');
             },
             close: () => c.stripValue(null),
@@ -1123,7 +1128,7 @@ export class MuOpController {
                 c.say(`Variation\nDV ${pct(g.dejaVu)}%  Dens ${pct(g.density)}%`, pinch ? { value: g.density } : null);
             },
             apply: { name: 'Generate a variation into the current pattern (drums in STEP mode: only the selected sound)', run: () => c.generate(c.track) },
-            tap: { name: 'Generate a variation (same as push)', run: () => c.generate(c.track) },
+            tap: { name: 'Generate a variation (same as push)', run: () => c.lambadaPress || c.generate(c.track) },
             help: [
                 {
                     keys: 'VARIATION',
@@ -1484,6 +1489,16 @@ export class MuOpController {
         g.generate(t, this.song.patterns[pattern].tracks[track], this.song, one);
         this.saveSoon();
         if (announce) this.say(`Variation ${pct(g.settings.dejaVu)}%\n${one !== undefined ? DRUM_SOUNDS[one].name : this.label(track)}`);
+        this.update();
+    }
+
+    /** Easter egg (SHIFT + VARIATION): the current pattern becomes a lambada. One undo step (SHIFT + pad 1). */
+    private lambada(): void {
+        this.history.edit(this.seq.pattern);
+        const tracks = lambada(this.song, this.song.patterns[this.seq.pattern]);
+        this.heldStep = null;
+        this.saveSoon();
+        this.say(`~ Lambada! ~\n${tracks.length ? tracks.join(' ') : 'no tracks'}`);
         this.update();
     }
 

@@ -140,17 +140,23 @@ const DRUM_PARAM_SET = [
 /** Distortion amount of a melodic instrument (applied by the mixer, after the instrument). */
 export const DRIVE: ParamDef = { id: 'drive', name: 'Drive', min: 0, max: 1, default: 0, unit: '%', random: [0, 0.4] };
 
+/**
+ * Input range the drive curve covers: ±4 (+12 dB). A WaveShaper clamps its input to the curve's ends (±1), which
+ * cut hot signals (a kick at Level > 1, a sum of drums) flat = crackles that the track volume after it can't fix.
+ * The stage scales the input down by this, the curve maps it back, so it rounds off instead.
+ */
+const HEADROOM = 4;
 const curves = new Map<number, Float32Array<ArrayBuffer>>();
-/** Soft clipping (tanh) curve for a WaveShaper, drive 0..1 (0 = null: straight through). */
+/** Soft clipping (tanh) curve for a WaveShaper over ±HEADROOM, drive 0..1 (0 = null: straight through). */
 export function driveCurve(drive: number): Float32Array<ArrayBuffer> | null {
     const key = Math.round(drive * 50);
     if (key <= 0) return null;
     let curve = curves.get(key);
     if (!curve) {
         const k = 1 + (key / 50) ** 1.5 * 40;
-        curve = new Float32Array(1024);
+        curve = new Float32Array(8192); // fine enough for the steep middle at high drive (linear interpolation)
         for (let i = 0; i < curve.length; i++) {
-            const x = (i / (curve.length - 1)) * 2 - 1;
+            const x = ((i / (curve.length - 1)) * 2 - 1) * HEADROOM;
             curve[i] = Math.tanh(k * x) / Math.tanh(k);
         }
         curves.set(key, curve);
@@ -161,17 +167,24 @@ export function driveCurve(drive: number): Float32Array<ArrayBuffer> | null {
 /** Level after the shaper: distortion gets louder, this keeps it about even. */
 export const driveMakeup = (drive: number) => 1 / (1 + 1.6 * drive);
 
-/** A drive stage (WaveShaper → makeup gain) into `out`. Returns its input; update() changes the amount live. */
+/**
+ * A drive stage (input gain → WaveShaper → makeup gain) into `out`. Returns its input; update() changes the amount live.
+ * Always 2 channels out: when the channel count at a filter / shaper input changes (a stereo source such as Tone's
+ * noise connects or gets disposed), Chrome rebuilds that node and its state is lost = a click on a ringing kick.
+ */
 export function driveStage(ctx: BaseAudioContext, out: AudioNode, drive = 0) {
+    const input = new GainNode(ctx, { channelCount: 2, channelCountMode: 'explicit' });
     const shaper = new WaveShaperNode(ctx, { oversample: '2x' });
     const makeup = new GainNode(ctx);
-    shaper.connect(makeup).connect(out);
+    input.connect(shaper).connect(makeup).connect(out);
     const update = (d: number) => {
-        shaper.curve = driveCurve(d);
+        const curve = driveCurve(d);
+        shaper.curve = curve;
+        input.gain.value = curve ? 1 / HEADROOM : 1; // no curve = straight through, nothing to scale
         makeup.gain.value = driveMakeup(d);
     };
     update(drive);
-    return { input: shaper as AudioNode, update, dispose: () => makeup.disconnect() };
+    return { input: input as AudioNode, update, dispose: () => makeup.disconnect() };
 }
 
 export interface DrumValues {

@@ -1,11 +1,12 @@
 // μOp sound: one instrument per track (chosen from the engine registry, src/engine/instruments/),
-// each → track gain (track volume) → low-pass (touch strip) → punch-in FX bus → master gain (volume) → speakers.
+// each → track gain (track volume) → low-pass (touch strip) → punch-in FX bus → master gain (volume) → limiter → speakers.
 import type { Color } from '../../maschine';
 import { DRIVE, DRUM_KITS, DRUM_ROLES, MELODIC, clampParam, driveStage, findInstrument, type DrumKit, type InstrumentDef, type Melodic, type Params, type Voice } from '../../engine/instruments';
 import type { TrackKind, TrackMidi } from './model';
 import { midiAllOff, midiNote } from '../../engine/midi';
 import { fromAudioTime } from '../../engine/audio';
 import { MasterFx } from '../../engine/fx';
+import { devlog } from '../../dev/devlog';
 
 const DRUM_COLORS: Color[] = ['red', 'orange', 'yellow', 'lime', 'cyan', 'blue', 'violet', 'magenta'];
 /** General MIDI drum notes, in DRUM_ROLES order (kick, snare, closed hat, open hat, clap, low tom, high tom, cowbell). */
@@ -49,6 +50,7 @@ interface Slot {
 
 export class Sounds {
     private master: GainNode;
+    private limiter: DynamicsCompressorNode;
     /** Strip DJ filter: the mix goes into `filter` (low-pass), then `highpass`. */
     private filter: BiquadFilterNode;
     private highpass: BiquadFilterNode;
@@ -74,11 +76,14 @@ export class Sounds {
         this.master = new GainNode(ctx, { gain: 0.8 });
         this.fx = new MasterFx(ctx);
         this.highpass.connect(this.fx.input);
-        this.fx.output.connect(this.master).connect(ctx.destination);
+        // safety limiter: a hot sum (drums + bass + pad) would clip at the output = crackles. Fast, hard knee, just
+        // under full scale; does nothing below it. The meter taps the master before it (over = the limiter works).
+        this.limiter = new DynamicsCompressorNode(ctx, { threshold: -2, knee: 0, ratio: 20, attack: 0.001, release: 0.1 });
+        this.fx.output.connect(this.master).connect(this.limiter).connect(ctx.destination);
         this.analyser = new AnalyserNode(ctx, { fftSize: 2048 });
         this.master.connect(this.analyser);
         this.meterBuffer = new Float32Array(this.analyser.fftSize);
-        this.inputBus = new GainNode(ctx, { gain: 1 });
+        this.inputBus = new GainNode(ctx, { gain: 1, channelCount: 2, channelCountMode: 'explicit' }); // fixed channels (see driveStage)
         this.inputAnalyser = new AnalyserNode(ctx, { fftSize: 1024 });
         this.inputBus.connect(this.filter);
         this.inputBus.connect(this.inputAnalyser);
@@ -186,7 +191,7 @@ export class Sounds {
 
     /**
      * Master level for the meter (call per animation frame): `peak` 0..1+ of the last ~40 ms, `hold` = falling peak,
-     * `over` = a sample reached full scale in the last 1.5 s (clipping: crackles).
+     * `over` = a sample reached full scale in the last 1.5 s (before the safety limiter: it's holding the mix back).
      */
     meter(): { peak: number; hold: number; over: boolean } {
         this.analyser.getFloatTimeDomainData(this.meterBuffer);
@@ -277,6 +282,9 @@ export class Sounds {
         const slot = this.slots.get(track);
         if (slot?.midi) midiNote(slot.midi.port, slot.midi.channel, DRUM_SOUNDS[sound]?.gm ?? 36, velocity, fromAudioTime(t), DRUM_MIDI_MS);
         else slot?.drums?.trigger(sound, t, velocity);
+        // dev: hits that arrive (nearly) too late (a busy main thread): Web Audio would start their envelopes mid-curve
+        const ahead = (t - this.ctx.currentTime) * 1000;
+        if (import.meta.env.DEV && ahead < 3) devlog('event', { app: 'muop', line: `late drum T${track + 1} sound ${sound}: ${ahead.toFixed(1)} ms ahead` });
     }
 
     /** `t` = audio time (s), `duration` in s (none = until release()). */
@@ -296,6 +304,7 @@ export class Sounds {
                 slot.next?.instrument.dispose();
             }
             this.master.disconnect();
+            this.limiter.disconnect();
         }, 300);
     }
 
