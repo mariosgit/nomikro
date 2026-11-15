@@ -107,7 +107,7 @@ function MuOp({ maschine }: AppProps) {
 
             {v && ctl && <StatusBar v={v} ctl={ctl} />}
 
-            <ProjectBar project={project} onSwitch={switchTo} beforeRead={() => ctl?.saveNow()} />
+            <ProjectBar project={project} onSwitch={switchTo} beforeRead={() => ctl?.saveNow()} song={ctl?.currentSong} />
 
             <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
                 {v && ctl ? (

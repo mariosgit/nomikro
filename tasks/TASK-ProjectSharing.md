@@ -21,6 +21,21 @@
   counts the beats down ("Next  Song 2 / 4..3..2..1..").
 - Not in a project (belong to the computer): STAR favorites, audio inputs. Track MIDI ports are in the song (port id + name).
 
+## Done: MIDI file export (2026-11-15)
+- [x] Project bar: note icon → `<project>.mid` (`src/apps/muop/midifile.ts`, `songToMidi()`): SMF type 1, 96 ppq, the chain
+  played once like the sequencer (rate / length polymeter, note lengths, harmony follow / transpose, voicings, swing baked
+  in). Tempo track (name, tempo, 4/4, "End" marker), then one track per used μOp track: its MIDI channel if set, else
+  drums on 10 (GM notes), others 1, 2, 3 … Not included: sounds, levels, punch-in FX, mute / solo (all tracks written).
+  Checked in Node (parsed back: counts, timing, channels).
+- [x] Split button: the note icon exports with the last options, the arrow opens them (remembered in localStorage
+  `muop/midi-export`): Patterns = Chain / All (every pattern with notes, in order), Repeat ×1 ×2 ×4 ×8 / until aligned
+  (LCM of all track loop periods, ≤ ×32), shows the bar count. Key signature (modes by their third: dorian → minor),
+  a marker per bar ("Pattern 4"). Checked in Node.
+- [x] Track selector (chips, default all, not remembered: per project). Left-out tracks keep the others' channels, don't
+  count for "until aligned"; the chords track still leads the harmony when left out. The options follow the live song
+  (`ctl.currentSong`, re-rendered on every controller change): change the chain on the device, the panel updates.
+- [ ] Optional: skip muted tracks, FX rendered.
+
 ## save/load...
 - [ ] share as a link: `#/muop?song=muop1:…` (the export string fits; ask before importing, or import as a new project).
 - [ ] sparse JSON (shorter strings, notes below).

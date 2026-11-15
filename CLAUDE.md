@@ -32,7 +32,7 @@ The device sits on the desk in front of a webcam (`/dev/video0`), so changes can
   - `starter/` template for a new app (copy it)
   - `muop/` μOp, PO-style groovebox, 16 tracks (kinds drums / notes / chords), SELECT + pad selects (`model.ts` song data,
     chords, `parseSong()` = checks / defaults / v1 → v2 migration for stored and imported songs, `projects.ts` projects in localStorage
-    (list, active, new / duplicate / rename / delete, export / import as `muop1:<gzip base64url>` text), `projectbar.tsx` its UI, `sounds.ts` mixer: instrument per track + strip filter + FX bus + volume,
+    (list, active, new / duplicate / rename / delete, export / import as `muop1:<gzip base64url>` text), `projectbar.tsx` its UI, `midifile.ts` export as a Standard MIDI File, `sounds.ts` mixer: instrument per track + strip filter + FX bus + volume,
     `sequencer.ts` chain playback + quantized recording + punch-in FX, `fx.ts` PERFORM FX table + track step remapping, `history.ts` undo history (pattern snapshots, gestures), `harmony.ts` key / chords track as harmony source (free / transpose / follow, chord suggestions), `variation.ts` VARIATION generator (Marbles-style déjà vu loops), `favorites.ts` STAR favorites + sound browser list, `page.ts` hold-a-button pages (`Pages`: routing of pads / `< >` / encoder / strip,
     button lights, display, generated cheat sheet), `controller.ts` input mapping / lights / display + the page definitions, `index.tsx` page, `panel.tsx` its right panel: mixer / sound editor / inputs / FX / help, `inputs.ts` audio inputs of this computer).
     Display messages go to the dev log (`event` with `app: 'muop'`).

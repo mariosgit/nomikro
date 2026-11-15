@@ -1830,6 +1830,11 @@ export class MuOpController {
         }).catch(ignore);
     }
 
+    /** The live song (read only: edits go through the controller), e.g. for the MIDI export options on the page. */
+    get currentSong(): Song {
+        return this.song;
+    }
+
     /** Stores the song right away (before export / duplicate: saveSoon() waits 500 ms after the last edit). */
     saveNow(): void {
         clearTimeout(this.saveTimer);

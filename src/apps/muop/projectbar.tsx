@@ -1,8 +1,70 @@
 // Project bar above the pads: pick / new / duplicate / rename / delete, export as a text to copy, import a pasted text.
 import React, { useEffect, useRef, useState } from 'react';
-import { createProject, deleteProject, duplicateProject, exportProject, importProject, projects, renameProject } from './projects';
+import { createProject, deleteProject, duplicateProject, exportProject, importProject, loadProject, projects, renameProject } from './projects';
+import type { Song } from './model';
+import { midiPlan, midiSequence, midiTracks, songToMidi, MAX_PASSES, type MidiOptions, type MidiRepeat } from './midifile';
 
-type Mode = { kind: 'none' } | { kind: 'rename'; name: string } | { kind: 'delete' } | { kind: 'export'; text: string; copied: boolean } | { kind: 'import'; text: string };
+const MIDI_OPTIONS_KEY = 'muop/midi-export';
+const DEFAULT_MIDI: MidiOptions = { source: 'chain', repeat: 1 };
+
+/** The last used MIDI export options (this browser). */
+function loadMidiOptions(): MidiOptions {
+    try {
+        const o = JSON.parse(localStorage.getItem(MIDI_OPTIONS_KEY) ?? 'null') as Partial<MidiOptions> | null;
+        return {
+            source: o?.source === 'all' ? 'all' : 'chain',
+            repeat: ([1, 2, 4, 8, 'align'] as const).find((r) => r === o?.repeat) ?? 1,
+        };
+    } catch {
+        return DEFAULT_MIDI;
+    }
+}
+
+function saveMidiOptions(o: MidiOptions): void {
+    try {
+        localStorage.setItem(MIDI_OPTIONS_KEY, JSON.stringify({ source: o.source, repeat: o.repeat })); // tracks: per project, not kept
+    } catch {
+        // blocked storage: the options just aren't remembered
+    }
+}
+
+/** Saves the project as a .mid file (browser download). */
+function downloadMidi(song: Song, name: string, options: MidiOptions): void {
+    const blob = new Blob([songToMidi(song, name, options) as Uint8Array<ArrayBuffer>], { type: 'audio/midi' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'song'}.mid`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** One segmented choice (radio-like buttons). */
+function Segmented<T extends string | number>({ value, options, onChange }: { value: T; options: { value: T; label: string; title?: string }[]; onChange: (v: T) => void }) {
+    return (
+        <div className="inline-flex overflow-hidden rounded-md border border-zinc-300 dark:border-zinc-700" role="radiogroup">
+            {options.map((o) => (
+                <button
+                    key={String(o.value)}
+                    type="button"
+                    role="radio"
+                    aria-checked={o.value === value}
+                    title={o.title}
+                    onClick={() => onChange(o.value)}
+                    className={
+                        o.value === value
+                            ? 'bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white dark:bg-zinc-100 dark:text-zinc-900'
+                            : 'px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800'
+                    }
+                >
+                    {o.label}
+                </button>
+            ))}
+        </div>
+    );
+}
+
+type Mode = { kind: 'none' } | { kind: 'midi' } | { kind: 'rename'; name: string } | { kind: 'delete' } | { kind: 'export'; text: string; copied: boolean } | { kind: 'import'; text: string };
 
 const BTN =
     'rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800';
@@ -20,6 +82,8 @@ const ICONS = {
     download: 'M12 4v11M7 10l5 5 5-5M5 15v5h14v-5',
     clipboard: 'M9 4h6v3H9zM8 5H5v16h14V5h-3',
     check: 'M5 12l5 5 9-10',
+    chevron: 'M7 10l5 5 5-5',
+    midi: 'M9 18V5l11-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z',
 } as const;
 
 function Icon({ name }: { name: keyof typeof ICONS }) {
@@ -42,16 +106,30 @@ const BTN_RED = 'rounded-md bg-red-600 px-2.5 py-1 text-xs font-medium text-whit
 const FIELD =
     'w-full rounded-md border border-zinc-300 bg-white px-2 py-1 font-mono text-xs text-zinc-800 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200';
 
-export function ProjectBar({ project, onSwitch, beforeRead }: { project: string; onSwitch: (id: string) => void; beforeRead: () => void }) {
+/** `song`: the live song while the device task runs (the MIDI options follow edits on the device), else the stored one. */
+export function ProjectBar({ project, onSwitch, beforeRead, song }: { project: string; onSwitch: (id: string) => void; beforeRead: () => void; song?: Song }) {
     const [mode, setMode] = useState<Mode>({ kind: 'none' });
     const [error, setError] = useState('');
     const [, setTick] = useState(0);
     const list = projects().list;
     const current = list.find((p) => p.id === project);
     const area = useRef<HTMLTextAreaElement>(null);
+    const [midi, setMidiState] = useState<MidiOptions>(loadMidiOptions);
+    const setMidi = (o: MidiOptions) => {
+        setMidiState(o);
+        saveMidiOptions(o);
+    };
+    const exportMidi = () =>
+        run(() => {
+            beforeRead();
+            downloadMidi(song ?? loadProject(project), current?.name ?? 'Song', midi);
+        });
 
-    // close the panels when the project changes from elsewhere
-    useEffect(() => setMode({ kind: 'none' }), [project]);
+    // close the panels when the project changes from elsewhere; another song: all tracks again
+    useEffect(() => {
+        setMode({ kind: 'none' });
+        setMidiState((o) => ({ ...o, exclude: [] }));
+    }, [project]);
 
     const run = async (fn: () => void | Promise<void>) => {
         setError('');
@@ -118,6 +196,30 @@ export function ProjectBar({ project, onSwitch, beforeRead }: { project: string;
                     on={mode.kind === 'import'}
                     onClick={() => toggle('import', () => setMode({ kind: 'import', text: '' }))}
                 />
+                <span className="inline-flex">
+                    <button
+                        className={`${ICON_BTN} rounded-r-none`}
+                        title={`Export MIDI file (.mid): ${midi.source === 'chain' ? 'the chain' : 'all patterns'}, ${midi.repeat === 'align' ? 'until aligned' : `×${midi.repeat}`}${midi.exclude?.length ? `, ${midi.exclude.length} tracks left out` : ''} (options: arrow)`}
+                        aria-label="Export MIDI file"
+                        onClick={exportMidi}
+                    >
+                        <Icon name="midi" />
+                    </button>
+                    <button
+                        className={`${mode.kind === 'midi' ? ICON_BTN_ON : ICON_BTN} -ml-px w-5 rounded-l-none`}
+                        title="MIDI export options"
+                        aria-label="MIDI export options"
+                        aria-pressed={mode.kind === 'midi'}
+                        onClick={() =>
+                            toggle('midi', () => {
+                                beforeRead();
+                                setMode({ kind: 'midi' });
+                            })
+                        }
+                    >
+                        <Icon name="chevron" />
+                    </button>
+                </span>
                 <span className="ml-auto text-xs text-zinc-400 dark:text-zinc-500" title="Projects are stored in this browser (localStorage)">
                     saved automatically
                 </span>
@@ -188,6 +290,8 @@ export function ProjectBar({ project, onSwitch, beforeRead }: { project: string;
                 </div>
             )}
 
+            {mode.kind === 'midi' && <MidiPanel song={song} project={project} options={midi} onChange={setMidi} onExport={exportMidi} />}
+
             {mode.kind === 'import' && (
                 <form
                     className="space-y-1.5"
@@ -219,5 +323,92 @@ export function ProjectBar({ project, onSwitch, beforeRead }: { project: string;
 
             {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
         </section>
+    );
+}
+
+/** MIDI export options: which patterns, how often, which tracks; shows what the file will contain. Follows the live song. */
+function MidiPanel({ song: live, project, options, onChange, onExport }: { song?: Song; project: string; options: MidiOptions; onChange: (o: MidiOptions) => void; onExport: () => void }) {
+    const [stored] = useState(() => (live ? null : loadProject(project))); // no device: read it once
+    const song = live ?? stored!;
+    const chain = midiSequence(song, 'chain');
+    const all = midiSequence(song, 'all');
+    const plan = midiPlan(song, options);
+    const align = midiPlan(song, { ...options, repeat: 'align' });
+    const exclude = options.exclude ?? [];
+    const used = midiTracks(song);
+    const count = midiTracks(song, exclude).length; // exclude may name tracks emptied since
+    const list = (seq: number[]) => (seq.length > 8 ? `${seq.length} patterns` : seq.map((p) => p + 1).join(' '));
+    const toggleTrack = (i: number) => onChange({ ...options, exclude: exclude.includes(i) ? exclude.filter((x) => x !== i) : [...exclude, i] });
+    const chip = (on: boolean) =>
+        on
+            ? 'rounded-md bg-zinc-900 px-2 py-0.5 text-xs font-medium text-white dark:bg-zinc-100 dark:text-zinc-900'
+            : 'rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-400 line-through hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-500 dark:hover:bg-zinc-800';
+    return (
+        <div className="space-y-2 text-xs text-zinc-500 dark:text-zinc-400">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <span className="flex items-center gap-2">
+                    Patterns
+                    <Segmented
+                        value={options.source}
+                        onChange={(source) => onChange({ ...options, source })}
+                        options={[
+                            { value: 'chain', label: `Chain (${list(chain)})`, title: 'The pattern chain as it plays (change it on the device: the list follows)' },
+                            { value: 'all', label: `All (${list(all) || 'none'})`, title: 'Every pattern with notes, in order, one bar each' },
+                        ]}
+                    />
+                </span>
+                <span className="flex items-center gap-2">
+                    Repeat
+                    <Segmented<MidiRepeat>
+                        value={options.repeat}
+                        onChange={(repeat) => onChange({ ...options, repeat })}
+                        options={[
+                            ...([1, 2, 4, 8] as const).map((r) => ({ value: r, label: `×${r}` })),
+                            {
+                                value: 'align',
+                                label: align.aligned ? `until aligned (×${align.passes})` : `until aligned (>×${MAX_PASSES})`,
+                                title: 'Repeats until every exported track starts its loop together again (tracks with other lengths / rates)',
+                            },
+                        ]}
+                    />
+                </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+                <span className="mr-0.5">Tracks</span>
+                <button
+                    type="button"
+                    className={chip(count === used.length)}
+                    title="All tracks"
+                    onClick={() => onChange({ ...options, exclude: count === used.length ? used : [] })}
+                >
+                    All
+                </button>
+                {used.map((i) => (
+                    <button
+                        key={i}
+                        type="button"
+                        className={chip(!exclude.includes(i))}
+                        aria-pressed={!exclude.includes(i)}
+                        title={`${song.tracks[i].name} (${song.tracks[i].kind}): click to ${exclude.includes(i) ? 'add it' : 'leave it out'}`}
+                        onClick={() => toggleTrack(i)}
+                    >
+                        {song.tracks[i].name}
+                    </button>
+                ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+                <button className={BTN} onClick={onExport} disabled={!plan.sequence.length || !count}>
+                    Export .mid
+                </button>
+                <span>
+                    {!plan.sequence.length
+                        ? 'no pattern with notes'
+                        : !count
+                          ? 'no track chosen'
+                          : `${plan.bars} ${plan.bars === 1 ? 'bar' : 'bars'}, ${count} ${count === 1 ? 'track' : 'tracks'}`}
+                    {!plan.aligned && ` (capped at ×${MAX_PASSES}, not aligned)`} · a marker per pattern, the song key · not included: sounds, FX, mute / solo
+                </span>
+            </div>
+        </div>
     );
 }
